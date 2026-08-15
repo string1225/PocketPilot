@@ -8,7 +8,7 @@ interface AbortControllerHost {
 export const resolveRuntimeGlobal = (): object => {
   if (typeof window !== "undefined") return window;
   if (typeof globalThis !== "undefined") return globalThis;
-  throw new Error("AgentDock runtime global object is unavailable.");
+  throw new Error("PocketPilot runtime global object is unavailable.");
 };
 
 /**
@@ -78,7 +78,7 @@ class LightweightAbortController {
   }
 }
 
-/** Installs the smallest AbortController implementation AgentDock needs. */
+/** Installs the smallest AbortController implementation PocketPilot needs. */
 export const installAbortControllerFallback = (
   target: AbortControllerHost = resolveRuntimeGlobal() as AbortControllerHost,
 ): boolean => {

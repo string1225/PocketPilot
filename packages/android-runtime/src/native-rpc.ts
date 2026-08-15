@@ -5,7 +5,7 @@ import {
   type ToolContext,
   type ToolResult,
   type ToolRisk
-} from "@agentdock/tool-runtime";
+} from "@pocketpilot/tool-runtime";
 
 import {
   ANDROID_BRIDGE_VERSION,

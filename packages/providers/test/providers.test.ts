@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentMessage, ProviderRequest } from "@agentdock/agent-core";
-import { toolSuccess } from "@agentdock/tool-runtime";
+import type { AgentMessage, ProviderRequest } from "@pocketpilot/agent-core";
+import { toolSuccess } from "@pocketpilot/tool-runtime";
 
 import {
   OfflineCommandProvider,

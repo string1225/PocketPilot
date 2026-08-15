@@ -1,6 +1,6 @@
-# AgentDock
+# PocketPilot
 
-AgentDock 是一个去中心化 Android Agent Workspace。手机保存 Project、Workspace、Checkpoint 和运行记录；TypeScript Agent 通过受控 Tool 调用操作项目。后续的构建、测试与长任务可以委托给用户自己的远程服务器。
+PocketPilot 是一个去中心化 Android Agent Workspace。手机保存 Project、Workspace、Checkpoint 和运行记录；TypeScript Agent 通过受控 Tool 调用操作项目。后续的构建、测试与长任务可以委托给用户自己的远程服务器。
 
 当前 `0.1.0` 是第一阶段纵向切片，重点验证这条真实链路：
 
@@ -41,13 +41,13 @@ docs/                         技术方案与真机指南
 需要 Node.js 22.12+、pnpm 10.29.1、JDK 17、Android SDK Platform 36 和 Build Tools 36.0.0。
 
 ```powershell
-cd C:\Users\junte\Code\agentdock
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
 
-cd apps\android
+Push-Location apps\android
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+Pop-Location
 ```
 
 `pnpm check` 会执行 TypeScript 类型检查、单元测试、构建 Runtime bundle，并把 bundle 同步到 Android assets。Debug APK 生成在 `apps/android/app/build/outputs/apk/debug/app-debug.apk`。
@@ -58,7 +58,7 @@ cd apps\android
 
 ```text
 /list
-/create notes/hello.md | Hello AgentDock
+/create notes/hello.md | Hello PocketPilot
 /read notes/hello.md
 /replace notes/hello.md | Hello | Hi
 /delete notes/hello.md
@@ -73,4 +73,4 @@ cd apps\android
 
 ## 分支与提交约定
 
-日常开发使用 `dev`，并跟踪 `origin/dev`。AgentDock 内部的自动 Checkpoint 与 Git Commit 是两套独立历史；恢复 Checkpoint 只恢复 Workspace，不移动 Git HEAD。
+日常开发使用 `dev`，并跟踪 `origin/dev`。PocketPilot 内部的自动 Checkpoint 与 Git Commit 是两套独立历史；恢复 Checkpoint 只恢复 Workspace，不移动 Git HEAD。

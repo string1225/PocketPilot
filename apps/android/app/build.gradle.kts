@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.string1225.agentdock"
+    namespace = "com.string1225.pocketpilot"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.string1225.agentdock"
+        applicationId = "com.string1225.pocketpilot"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -68,8 +68,8 @@ dependencies {
 }
 
 val verifyAgentRuntimeAsset by tasks.registering {
-    val runtimeHtml = layout.projectDirectory.file("src/main/assets/agentdock-runtime.html")
-    val runtimeAsset = layout.projectDirectory.file("src/main/assets/agentdock-runtime.js")
+    val runtimeHtml = layout.projectDirectory.file("src/main/assets/pocketpilot-runtime.html")
+    val runtimeAsset = layout.projectDirectory.file("src/main/assets/pocketpilot-runtime.js")
     inputs.files(runtimeHtml, runtimeAsset)
     doLast {
         check(runtimeHtml.asFile.isFile) {

@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.AgentDock" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.PocketPilot" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">#F5F7FA</item>

@@ -1,5 +1,5 @@
-import type { AgentEvent } from "@agentdock/agent-core";
-import type { ToolResult } from "@agentdock/tool-runtime";
+import type { AgentEvent } from "@pocketpilot/agent-core";
+import type { ToolResult } from "@pocketpilot/tool-runtime";
 
 export const ANDROID_BRIDGE_VERSION = 1 as const;
 
@@ -49,19 +49,19 @@ export interface RuntimeStartRequest {
   readonly maxSteps?: number;
 }
 
-export interface AgentDockNativeBridge {
+export interface PocketPilotNativeBridge {
   postMessage(envelopeJson: string): void;
 }
 
-export interface AgentDockRuntimeGlobal {
+export interface PocketPilotRuntimeGlobal {
   start(requestJson: string): Promise<string>;
   receive(envelopeJson: string): void;
   cancel(runId: string): boolean;
 }
 
-export interface AgentDockGlobalScope {
-  AgentDockNativeBridge?: AgentDockNativeBridge;
-  AgentDockRuntime?: AgentDockRuntimeGlobal;
+export interface PocketPilotGlobalScope {
+  PocketPilotNativeBridge?: PocketPilotNativeBridge;
+  PocketPilotRuntime?: PocketPilotRuntimeGlobal;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>

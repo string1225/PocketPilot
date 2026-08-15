@@ -1,4 +1,4 @@
-@rem AgentDock Gradle wrapper launcher for Windows.
+@rem PocketPilot Gradle wrapper launcher for Windows.
 @echo off
 setlocal
 

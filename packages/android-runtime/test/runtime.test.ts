@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { toolSuccess } from "@agentdock/tool-runtime";
+import { toolSuccess } from "@pocketpilot/tool-runtime";
 
 import {
   ANDROID_BRIDGE_VERSION,
   AndroidAgentRuntime,
   NativeRpcClient,
   installAbortControllerFallback,
-  installAgentDockRuntime,
+  installPocketPilotRuntime,
   resolveRuntimeGlobal,
-  type AgentDockGlobalScope,
+  type PocketPilotGlobalScope,
   type ToolRequestEnvelope
 } from "../src/index.js";
 
@@ -19,13 +19,13 @@ const parse = (json: string): Record<string, unknown> =>
 describe("Android runtime bridge", () => {
   it("installs the required global API and immediately announces runtime.ready", () => {
     const postMessage = vi.fn();
-    const target: AgentDockGlobalScope = {
-      AgentDockNativeBridge: { postMessage }
+    const target: PocketPilotGlobalScope = {
+      PocketPilotNativeBridge: { postMessage }
     };
 
-    const api = installAgentDockRuntime(target);
+    const api = installPocketPilotRuntime(target);
 
-    expect(target.AgentDockRuntime).toBe(api);
+    expect(target.PocketPilotRuntime).toBe(api);
     expect(api).toEqual({
       start: expect.any(Function),
       receive: expect.any(Function),
@@ -47,8 +47,8 @@ describe("Android runtime bridge", () => {
 
   it("turns a rejected fire-and-forget start into a run.failed event", async () => {
     const postMessage = vi.fn();
-    const api = installAgentDockRuntime({
-      AgentDockNativeBridge: { postMessage }
+    const api = installPocketPilotRuntime({
+      PocketPilotNativeBridge: { postMessage }
     });
     postMessage.mockClear();
 

@@ -1,4 +1,4 @@
-# AgentDock Android 真机接入与测试指南
+# PocketPilot Android 真机接入与测试指南
 
 这份指南面向当前的 `0.1.0` 纵向切片。手机接入当前这台 Windows 电脑并被 `adb` 识别后，Codex 可以在同一个终端环境里继续执行构建、安装、启动、抓日志和回归测试；不需要把手机账号或屏幕控制权交给任何云服务。
 
@@ -40,7 +40,6 @@ adb version
 在仓库根目录执行：
 
 ```powershell
-cd C:\Users\junte\Code\agentdock
 git switch dev
 git pull --ff-only origin dev
 corepack enable
@@ -58,18 +57,19 @@ sdk.dir=C\:\\Users\\junte\\AppData\\Local\\Android\\Sdk
 构建并运行 Android 单元测试：
 
 ```powershell
-cd C:\Users\junte\Code\agentdock\apps\android
+Push-Location apps\android
 .\gradlew.bat testDebugUnitTest
 .\gradlew.bat assembleDebug
+Pop-Location
 ```
 
 APK 路径：
 
 ```text
-C:\Users\junte\Code\agentdock\apps\android\app\build\outputs\apk\debug\app-debug.apk
+apps\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-也可以用 Android Studio 直接打开 `C:\Users\junte\Code\agentdock\apps\android`，等待 Gradle Sync 完成。
+也可以用 Android Studio 直接打开仓库中的 `apps\android` 目录，等待 Gradle Sync 完成。
 
 ## 3. 用 USB 连接手机
 
@@ -107,29 +107,30 @@ SERIAL_NUMBER    device product:... model:... transport_id:...
 只有一台设备时：
 
 ```powershell
-cd C:\Users\junte\Code\agentdock\apps\android
+Push-Location apps\android
 .\gradlew.bat installDebug
-adb shell am start -n com.string1225.agentdock/.MainActivity
+Pop-Location
+adb shell am start -n com.string1225.pocketpilot/.MainActivity
 ```
 
 也可以直接安装已经构建的 APK：
 
 ```powershell
-adb install -r .\app\build\outputs\apk\debug\app-debug.apk
+adb install -r .\apps\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-只看 AgentDock 进程日志：
+只看 PocketPilot 进程日志：
 
 ```powershell
-$agentDockPid = (adb shell pidof com.string1225.agentdock).Trim()
-adb logcat --pid=$agentDockPid
+$pocketPilotPid = (adb shell pidof com.string1225.pocketpilot).Trim()
+adb logcat --pid=$pocketPilotPid
 ```
 
 保存完整日志到电脑：
 
 ```powershell
 adb logcat -c
-adb logcat -v threadtime | Tee-Object -FilePath .\agentdock-logcat.txt
+adb logcat -v threadtime | Tee-Object -FilePath .\pocketpilot-logcat.txt
 ```
 
 日志采集完成后按 `Ctrl+C`。日志可能包含项目文件名或测试输入，分享前先检查内容；API Key/SSH 凭据在当前版本尚未接入。
@@ -141,7 +142,7 @@ adb logcat -v threadtime | Tee-Object -FilePath .\agentdock-logcat.txt
 1. 首次启动应自动出现且只出现一个“个人项目”。
 2. 新建 `真机测试` Project，然后进入。
 3. 在 Files 中创建 `notes/hello.md`。
-4. 写入 `Hello AgentDock` 并保存。
+4. 写入 `Hello PocketPilot` 并保存。
 5. 关闭 App 再打开，确认 Project、文件和内容仍在。
 
 ### TypeScript Agent Runtime
@@ -189,8 +190,8 @@ Agent 页面当前明确标注“离线演示模式”。它仍然经过真实�
 ### 进程重启
 
 ```powershell
-adb shell am force-stop com.string1225.agentdock
-adb shell am start -n com.string1225.agentdock/.MainActivity
+adb shell am force-stop com.string1225.pocketpilot
+adb shell am start -n com.string1225.pocketpilot/.MainActivity
 ```
 
 确认 Project、Workspace 和 Checkpoint 都仍存在。若强制停止发生在 Agent Run 中间，重启后数据库会把残留的 `RUNNING` 状态标为失败/中断，不会假装任务已完成。
@@ -215,6 +216,6 @@ adb devices -l
 2. `adb devices -l` 显示目标状态为 `device`。
 3. 在当前任务里告诉 Codex：“手机已连接，可以做真机测试”。如果有多台设备，同时提供目标 serial。
 
-之后 Codex 可以在本机执行只针对该测试设备的以下操作：构建 Debug APK、安装/覆盖安装、启动/停止 AgentDock、运行 instrumentation test、抓取 AgentDock logcat、查看应用级崩溃信息。涉及清空 App 数据、卸载、重启手机或改系统设置等破坏性/扩大范围操作，会先明确说明并征得确认。
+之后 Codex 可以在本机执行只针对该测试设备的以下操作：构建 Debug APK、安装/覆盖安装、启动/停止 PocketPilot、运行 instrumentation test、抓取 PocketPilot logcat、查看应用级崩溃信息。涉及清空 App 数据、卸载、重启手机或改系统设置等破坏性/扩大范围操作，会先明确说明并征得确认。
 
 早期测试只使用临时 Project、测试仓库和低权限测试服务器。不要在首版 APK 中放生产 API Key、生产 Git Token 或生产 SSH 私钥。

@@ -20,25 +20,25 @@ importers:
 
   packages/agent-core:
     dependencies:
-      '@agentdock/tool-runtime':
+      '@pocketpilot/tool-runtime':
         specifier: workspace:*
         version: link:../tool-runtime
 
   packages/android-runtime:
     dependencies:
-      '@agentdock/agent-core':
+      '@pocketpilot/agent-core':
         specifier: workspace:*
         version: link:../agent-core
-      '@agentdock/providers':
+      '@pocketpilot/providers':
         specifier: workspace:*
         version: link:../providers
-      '@agentdock/tool-runtime':
+      '@pocketpilot/tool-runtime':
         specifier: workspace:*
         version: link:../tool-runtime
 
   packages/checkpoint:
     dependencies:
-      '@agentdock/workspace':
+      '@pocketpilot/workspace':
         specifier: workspace:*
         version: link:../workspace
 
@@ -46,10 +46,10 @@ importers:
 
   packages/providers:
     dependencies:
-      '@agentdock/agent-core':
+      '@pocketpilot/agent-core':
         specifier: workspace:*
         version: link:../agent-core
-      '@agentdock/tool-runtime':
+      '@pocketpilot/tool-runtime':
         specifier: workspace:*
         version: link:../tool-runtime
 
@@ -59,7 +59,7 @@ importers:
 
   packages/workspace:
     dependencies:
-      '@agentdock/tool-runtime':
+      '@pocketpilot/tool-runtime':
         specifier: workspace:*
         version: link:../tool-runtime
 

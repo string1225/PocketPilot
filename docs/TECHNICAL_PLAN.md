@@ -1,8 +1,8 @@
-# AgentDock v0.1 技术规划与实施方案
+# PocketPilot v0.1 技术规划与实施方案
 
 ## 1. 结论与本次交付边界
 
-AgentDock 的长期目标是“手机上的去中心化 Agent 控制中心”，而不是把完整桌面开发环境塞进手机。系统由本地 Android 控制面、纯 TypeScript Agent Kernel、受控 Tool Runtime、项目工作区和可选远程执行端组成。
+PocketPilot 的长期目标是“手机上的去中心化 Agent 控制中心”，而不是把完整桌面开发环境塞进手机。系统由本地 Android 控制面、纯 TypeScript Agent Kernel、受控 Tool Runtime、项目工作区和可选远程执行端组成。
 
 本次实现的是第一阶段可运行纵向切片：
 
@@ -20,7 +20,7 @@ AgentDock 的长期目标是“手机上的去中心化 Agent 控制中心”，
 ### 2.1 Monorepo
 
 ```text
-agentdock/
+pocketpilot/
 ├── apps/
 │   └── android/                 Kotlin + Jetpack Compose App
 ├── packages/
@@ -68,7 +68,7 @@ Tool Registry -> Native Workspace Tool
 
 `deepseek-harness-master` 是设计参考，不在首版整体移植。它的 Agent Loop 依赖较大的 Harness/Cordis/Session/LLM package graph，根工程要求 Node 22+，并包含主机端、终端和原生隔离能力；直接放进 Android 会把桌面运行时依赖带入移动端。
 
-首版吸收以下成熟模式，并用 AgentDock 自己的轻量 contract 实现：
+首版吸收以下成熟模式，并用 PocketPilot 自己的轻量 contract 实现：
 
 - Agent 具有明确的 `idle/running/waiting_for_approval/completed/failed/cancelled` 状态。
 - 所有重要过程以有序事件记录，UI 不解析日志字符串。
@@ -204,7 +204,7 @@ API Key 和 SSH 私钥不得明文放进普通 SQLite；第二阶段用 Android 
 离线 Provider 支持可重复的验收指令，例如：
 
 - `/list`
-- `/create notes/hello.md | Hello AgentDock`
+- `/create notes/hello.md | Hello PocketPilot`
 - `/read notes/hello.md`
 - `/replace notes/hello.md | Hello | Hi`
 - `/delete notes/hello.md`

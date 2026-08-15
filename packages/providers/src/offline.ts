@@ -4,7 +4,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
   ProviderToolCall
-} from "@agentdock/agent-core";
+} from "@pocketpilot/agent-core";
 
 const help = [
   "Offline demo commands:",

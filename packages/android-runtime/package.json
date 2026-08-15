@@ -1,5 +1,5 @@
 {
-  "name": "@agentdock/android-runtime",
+  "name": "@pocketpilot/android-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,12 +13,12 @@
   },
   "scripts": {
     "build": "tsc -b && pnpm bundle",
-    "bundle": "esbuild src/global.ts --bundle --format=iife --target=chrome61 --outfile=dist/agentdock-runtime.js",
+    "bundle": "esbuild src/global.ts --bundle --format=iife --target=chrome61 --outfile=dist/pocketpilot-runtime.js",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@agentdock/agent-core": "workspace:*",
-    "@agentdock/providers": "workspace:*",
-    "@agentdock/tool-runtime": "workspace:*"
+    "@pocketpilot/agent-core": "workspace:*",
+    "@pocketpilot/providers": "workspace:*",
+    "@pocketpilot/tool-runtime": "workspace:*"
   }
 }

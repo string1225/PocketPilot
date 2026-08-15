@@ -1,5 +1,5 @@
 {
-  "name": "agentdock",
+  "name": "pocketpilot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,8 +8,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "tsc -b && pnpm --filter @agentdock/android-runtime bundle && node scripts/sync-android-runtime.mjs",
-    "runtime:bundle": "pnpm --filter @agentdock/android-runtime bundle && node scripts/sync-android-runtime.mjs",
+    "build": "tsc -b && pnpm --filter @pocketpilot/android-runtime bundle && node scripts/sync-android-runtime.mjs",
+    "runtime:bundle": "pnpm --filter @pocketpilot/android-runtime bundle && node scripts/sync-android-runtime.mjs",
     "clean": "tsc -b --clean",
     "test": "vitest run",
     "test:watch": "vitest",

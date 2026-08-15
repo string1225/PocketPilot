@@ -8,14 +8,14 @@ const packageSource = (name: string): string =>
 export default defineConfig({
   resolve: {
     alias: {
-      "@agentdock/agent-core": packageSource("agent-core"),
-      "@agentdock/android-runtime": packageSource("android-runtime"),
-      "@agentdock/checkpoint": packageSource("checkpoint"),
-      "@agentdock/git": packageSource("git"),
-      "@agentdock/providers": packageSource("providers"),
-      "@agentdock/storage": packageSource("storage"),
-      "@agentdock/tool-runtime": packageSource("tool-runtime"),
-      "@agentdock/workspace": packageSource("workspace")
+      "@pocketpilot/agent-core": packageSource("agent-core"),
+      "@pocketpilot/android-runtime": packageSource("android-runtime"),
+      "@pocketpilot/checkpoint": packageSource("checkpoint"),
+      "@pocketpilot/git": packageSource("git"),
+      "@pocketpilot/providers": packageSource("providers"),
+      "@pocketpilot/storage": packageSource("storage"),
+      "@pocketpilot/tool-runtime": packageSource("tool-runtime"),
+      "@pocketpilot/workspace": packageSource("workspace")
     }
   },
   test: {

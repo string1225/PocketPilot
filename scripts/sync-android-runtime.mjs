@@ -5,11 +5,11 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = resolve(
   repositoryRoot,
-  "packages/android-runtime/dist/agentdock-runtime.js",
+  "packages/android-runtime/dist/pocketpilot-runtime.js",
 );
 const destination = resolve(
   repositoryRoot,
-  "apps/android/app/src/main/assets/agentdock-runtime.js",
+  "apps/android/app/src/main/assets/pocketpilot-runtime.js",
 );
 
 try {

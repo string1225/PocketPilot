@@ -3,7 +3,7 @@ import {
   type ToolError,
   type ToolRegistry,
   type ToolResult
-} from "@agentdock/tool-runtime";
+} from "@pocketpilot/tool-runtime";
 
 import type {
   AgentEvent,

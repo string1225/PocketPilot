@@ -1,5 +1,5 @@
 {
-  "name": "@agentdock/tool-runtime",
+  "name": "@pocketpilot/tool-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",

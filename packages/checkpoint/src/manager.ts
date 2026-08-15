@@ -2,7 +2,7 @@ import type {
   WorkspaceFile,
   WorkspaceMutationEvent,
   WorkspacePort
-} from "@agentdock/workspace";
+} from "@pocketpilot/workspace";
 
 import {
   CheckpointError,

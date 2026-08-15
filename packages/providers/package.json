@@ -1,5 +1,5 @@
 {
-  "name": "@agentdock/providers",
+  "name": "@pocketpilot/providers",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@agentdock/agent-core": "workspace:*",
-    "@agentdock/tool-runtime": "workspace:*"
+    "@pocketpilot/agent-core": "workspace:*",
+    "@pocketpilot/tool-runtime": "workspace:*"
   }
 }

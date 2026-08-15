@@ -2,7 +2,7 @@ import type {
   ToolDefinition,
   ToolError,
   ToolResult
-} from "@agentdock/tool-runtime";
+} from "@pocketpilot/tool-runtime";
 
 export type AgentRunStatus =
   | "idle"

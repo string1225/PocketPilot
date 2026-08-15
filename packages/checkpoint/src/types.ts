@@ -1,4 +1,4 @@
-import type { WorkspaceFile } from "@agentdock/workspace";
+import type { WorkspaceFile } from "@pocketpilot/workspace";
 
 export type CheckpointSource = "agent" | "user" | "git" | "import";
 

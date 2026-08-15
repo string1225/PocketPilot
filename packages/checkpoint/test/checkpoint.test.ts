@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { ToolRegistry } from "@agentdock/tool-runtime";
-import { InMemoryWorkspace, createWorkspaceTools } from "@agentdock/workspace";
+import { ToolRegistry } from "@pocketpilot/tool-runtime";
+import { InMemoryWorkspace, createWorkspaceTools } from "@pocketpilot/workspace";
 
 import {
   CheckpointManager,

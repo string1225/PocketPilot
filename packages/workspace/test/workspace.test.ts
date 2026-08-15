@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ToolRegistry } from "@agentdock/tool-runtime";
+import { ToolRegistry } from "@pocketpilot/tool-runtime";
 
 import {
   InMemoryWorkspace,
@@ -87,7 +87,7 @@ describe("workspace tools", () => {
     await expect(
       execute("workspace.create", {
         path: "notes/hello.md",
-        content: "Hello AgentDock\nSecond line"
+        content: "Hello PocketPilot\nSecond line"
       }),
     ).resolves.toMatchObject({ success: true, data: { path: "notes/hello.md" } });
 
@@ -99,7 +99,7 @@ describe("workspace tools", () => {
       execute("workspace.read", { path: "notes/hello.md" }),
     ).resolves.toMatchObject({
       success: true,
-      data: { content: "Hello AgentDock\nSecond line" }
+      data: { content: "Hello PocketPilot\nSecond line" }
     });
 
     await expect(
@@ -112,11 +112,11 @@ describe("workspace tools", () => {
       execute("workspace.patch", {
         path: "notes/hello.md",
         oldText: "world",
-        newText: "AgentDock"
+        newText: "PocketPilot"
       }),
     ).resolves.toMatchObject({ success: true, data: { replacements: 1 } });
     await expect(
-      execute("workspace.search", { query: "agentdock", maxResults: 5 }),
+      execute("workspace.search", { query: "pocketpilot", maxResults: 5 }),
     ).resolves.toMatchObject({
       success: true,
       data: [{ path: "notes/hello.md", line: 1, column: 7 }]
@@ -129,7 +129,7 @@ describe("workspace tools", () => {
       }),
     ).resolves.toMatchObject({ success: true });
     await expect(workspace.read("archive/hello.md")).resolves.toBe(
-      "Hello AgentDock\nSecond line",
+      "Hello PocketPilot\nSecond line",
     );
     await expect(
       execute("workspace.delete", { path: "archive/hello.md" }),

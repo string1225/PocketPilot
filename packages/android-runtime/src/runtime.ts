@@ -3,9 +3,9 @@ import {
   type AgentEvent,
   type AgentProvider,
   type AgentRunResult
-} from "@agentdock/agent-core";
-import { OfflineCommandProvider } from "@agentdock/providers";
-import { ToolRegistry } from "@agentdock/tool-runtime";
+} from "@pocketpilot/agent-core";
+import { OfflineCommandProvider } from "@pocketpilot/providers";
+import { ToolRegistry } from "@pocketpilot/tool-runtime";
 
 import { createNativeWorkspaceTools, NativeRpcClient } from "./native-rpc.js";
 import {

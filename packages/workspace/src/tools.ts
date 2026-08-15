@@ -5,7 +5,7 @@ import {
   type JsonSchema,
   type JsonValue,
   type ToolResult
-} from "@agentdock/tool-runtime";
+} from "@pocketpilot/tool-runtime";
 
 import { normalizeWorkspacePath } from "./path.js";
 import { WorkspaceError, type WorkspacePort } from "./types.js";

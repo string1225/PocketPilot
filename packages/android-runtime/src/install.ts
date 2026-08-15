@@ -4,8 +4,8 @@ import {
   resolveRuntimeGlobal
 } from "./abort-controller-fallback.js";
 import type {
-  AgentDockGlobalScope,
-  AgentDockRuntimeGlobal
+  PocketPilotGlobalScope,
+  PocketPilotRuntimeGlobal
 } from "./protocol.js";
 import { ANDROID_BRIDGE_VERSION } from "./protocol.js";
 
@@ -41,20 +41,20 @@ const parseStartFailureContext = (requestJson: string): StartFailureContext | un
   }
 };
 
-export const installAgentDockRuntime = (
-  target: AgentDockGlobalScope = resolveRuntimeGlobal() as AgentDockGlobalScope,
-): AgentDockRuntimeGlobal => {
+export const installPocketPilotRuntime = (
+  target: PocketPilotGlobalScope = resolveRuntimeGlobal() as PocketPilotGlobalScope,
+): PocketPilotRuntimeGlobal => {
   installAbortControllerFallback();
   const runtime = new AndroidAgentRuntime({
     postMessage: (envelopeJson) => {
-      const bridge = target.AgentDockNativeBridge;
+      const bridge = target.PocketPilotNativeBridge;
       if (bridge === undefined || typeof bridge.postMessage !== "function") {
-        throw new Error("AgentDockNativeBridge.postMessage is unavailable.");
+        throw new Error("PocketPilotNativeBridge.postMessage is unavailable.");
       }
       bridge.postMessage(envelopeJson);
     }
   });
-  const api: AgentDockRuntimeGlobal = {
+  const api: PocketPilotRuntimeGlobal = {
     start: (requestJson) => runtime.start(requestJson).catch((error: unknown) => {
       const context = parseStartFailureContext(requestJson);
       const failure = {
@@ -73,7 +73,7 @@ export const installAgentDockRuntime = (
       };
       if (context !== undefined) {
         try {
-          target.AgentDockNativeBridge?.postMessage(
+          target.PocketPilotNativeBridge?.postMessage(
             JSON.stringify({
               version: ANDROID_BRIDGE_VERSION,
               id: `event:${context.runId}:start-failed`,
@@ -103,9 +103,9 @@ export const installAgentDockRuntime = (
     },
     cancel: (runId) => runtime.cancel(runId)
   };
-  target.AgentDockRuntime = api;
+  target.PocketPilotRuntime = api;
   try {
-    target.AgentDockNativeBridge?.postMessage(
+    target.PocketPilotNativeBridge?.postMessage(
       JSON.stringify({
         version: ANDROID_BRIDGE_VERSION,
         id: "runtime.ready",

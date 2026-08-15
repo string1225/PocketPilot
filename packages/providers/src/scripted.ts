@@ -2,7 +2,7 @@ import type {
   AgentProvider,
   ProviderRequest,
   ProviderResponse
-} from "@agentdock/agent-core";
+} from "@pocketpilot/agent-core";
 
 export type ScriptedProviderStep =
   | ProviderResponse

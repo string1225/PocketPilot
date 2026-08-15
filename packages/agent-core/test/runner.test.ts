@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ToolRegistry, toolFailure, toolSuccess } from "@agentdock/tool-runtime";
-import { ScriptedProvider } from "@agentdock/providers";
+import { ToolRegistry, toolFailure, toolSuccess } from "@pocketpilot/tool-runtime";
+import { ScriptedProvider } from "@pocketpilot/providers";
 
 import { DefaultAgentRunner, type AgentProvider } from "../src/index.js";
 

@@ -1,3 +1,3 @@
-import { installAgentDockRuntime } from "./install.js";
+import { installPocketPilotRuntime } from "./install.js";
 
-installAgentDockRuntime();
+installPocketPilotRuntime();
