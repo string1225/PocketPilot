@@ -1,0 +1,24 @@
+{
+  "name": "agentdock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -b && pnpm --filter @agentdock/android-runtime bundle && node scripts/sync-android-runtime.mjs",
+    "runtime:bundle": "pnpm --filter @agentdock/android-runtime bundle && node scripts/sync-android-runtime.mjs",
+    "clean": "tsc -b --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.8"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@agentdock/android-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && pnpm bundle",
+    "bundle": "esbuild src/global.ts --bundle --format=iife --target=chrome61 --outfile=dist/agentdock-runtime.js",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@agentdock/agent-core": "workspace:*",
+    "@agentdock/providers": "workspace:*",
+    "@agentdock/tool-runtime": "workspace:*"
+  }
+}

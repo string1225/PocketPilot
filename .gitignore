@@ -1,0 +1,13 @@
+node_modules/
+packages/*/dist/
+*.tsbuildinfo
+.vitest/
+coverage/
+.idea/
+*.iml
+.DS_Store
+local.properties
+.gradle/
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/

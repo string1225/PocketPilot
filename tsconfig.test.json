@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "@agentdock/agent-core": ["packages/agent-core/src/index.ts"],
+      "@agentdock/android-runtime": ["packages/android-runtime/src/index.ts"],
+      "@agentdock/checkpoint": ["packages/checkpoint/src/index.ts"],
+      "@agentdock/git": ["packages/git/src/index.ts"],
+      "@agentdock/providers": ["packages/providers/src/index.ts"],
+      "@agentdock/storage": ["packages/storage/src/index.ts"],
+      "@agentdock/tool-runtime": ["packages/tool-runtime/src/index.ts"],
+      "@agentdock/workspace": ["packages/workspace/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.test.ts"]
+}
