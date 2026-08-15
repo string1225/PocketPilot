@@ -277,7 +277,10 @@ class RuntimeAgentDockService(
 
     private fun prettyJson(value: Any): String = when (value) {
         is JSONObject -> value.toString(2)
-        else -> JSONObject.valueToString(value)
+        is String -> JSONObject.quote(value)
+        is Number -> JSONObject.numberToString(value)
+        is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
     }
 
     private fun timeline(

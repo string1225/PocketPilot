@@ -240,6 +240,9 @@ internal object RuntimeEnvelopeCodec {
     private fun jsonValueToString(value: Any?): String = when (value) {
         null, JSONObject.NULL -> "null"
         is JSONObject, is JSONArray -> value.toString()
-        else -> JSONObject.valueToString(value)
+        is String -> JSONObject.quote(value)
+        is Number -> JSONObject.numberToString(value)
+        is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
     }
 }
