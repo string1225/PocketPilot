@@ -1,0 +1,939 @@
+package com.string1225.pocketpilot.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Button
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.unit.dp
+import com.string1225.pocketpilot.model.AppLanguage
+import com.string1225.pocketpilot.model.LlmProtocolPreference
+import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.model.RemoteServerProfile
+import com.string1225.pocketpilot.model.SshAuthType
+import com.string1225.pocketpilot.model.ThemePreference
+import java.util.UUID
+
+private enum class EditableSetting {
+    PERSONALIZATION,
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    settings: PocketPilotSettings,
+    llmCredentialConfigured: Boolean,
+    gitCredentialConfigured: Boolean,
+    remoteServers: List<RemoteServerProfile>,
+    onSettingsChange: (PocketPilotSettings) -> Unit,
+    onSaveLlmCredential: (String) -> Unit,
+    onRemoveLlmCredential: () -> Unit,
+    onSaveGitCredential: (String) -> Unit,
+    onRemoveGitCredential: () -> Unit,
+    onSaveRemoteServer: (RemoteServerProfile, String?) -> Unit,
+    onDeleteRemoteServer: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val language = settings.language
+    var editableSetting by remember { mutableStateOf<EditableSetting?>(null) }
+    var showTheme by rememberSaveable { mutableStateOf(false) }
+    var showLanguage by rememberSaveable { mutableStateOf(false) }
+    var showModelSettings by rememberSaveable { mutableStateOf(false) }
+    var showRemoteServers by rememberSaveable { mutableStateOf(false) }
+    var showGitCredential by rememberSaveable { mutableStateOf(false) }
+    var showTools by rememberSaveable { mutableStateOf(false) }
+    var showPlugins by rememberSaveable { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(ppText(language, "设置", "Settings")) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = ppText(language, "返回", "Back"),
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            item {
+                SettingsHeader(
+                    title = ppText(language, "智能与连接", "Intelligence & connections"),
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.SmartToy,
+                    title = ppText(language, "模型", "Model"),
+                    value = "${settings.modelName} · ${settings.llmProtocol.label(language)} · " +
+                        if (llmCredentialConfigured) ppText(language, "已配置密钥", "Key configured")
+                        else ppText(language, "未配置密钥", "No key"),
+                    onClick = { showModelSettings = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Cloud,
+                    title = ppText(language, "远程服务器", "Remote server"),
+                    value = if (remoteServers.isEmpty()) {
+                        ppText(language, "未配置", "Not configured")
+                    } else {
+                        ppText(language, "${remoteServers.size} 台服务器", "${remoteServers.size} server(s)")
+                    },
+                    onClick = { showRemoteServers = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Tune,
+                    title = ppText(language, "个性化 / 灵魂提示词", "Personalization / system prompt"),
+                    value = settings.personalization.ifBlank { ppText(language, "使用默认行为", "Default behavior") },
+                    onClick = { editableSetting = EditableSetting.PERSONALIZATION },
+                )
+            }
+            item { HorizontalDivider() }
+            item { SettingsHeader(ppText(language, "能力", "Capabilities")) }
+            item {
+                SettingsToggleRow(
+                    icon = Icons.Default.History,
+                    title = ppText(language, "记忆", "Memory"),
+                    description = ppText(language, "允许模型使用当前会话的早期消息", "Let the model use earlier messages in this chat"),
+                    checked = settings.memoryEnabled,
+                    onCheckedChange = { onSettingsChange(settings.copy(memoryEnabled = it)) },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Build,
+                    title = ppText(language, "工具", "Tools"),
+                    value = if (settings.toolsEnabled) {
+                        ppText(language, "16 个工具已启用", "16 tools enabled")
+                    } else {
+                        ppText(language, "已停用", "Disabled")
+                    },
+                    onClick = { showTools = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Key,
+                    title = ppText(language, "Git HTTPS 凭据", "Git HTTPS credential"),
+                    value = if (gitCredentialConfigured) {
+                        ppText(language, "已安全保存", "Stored securely")
+                    } else {
+                        ppText(language, "仅支持公开仓库", "Public repositories only")
+                    },
+                    onClick = { showGitCredential = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Extension,
+                    title = ppText(language, "插件", "Plugins"),
+                    value = ppText(language, "当前未安装插件", "No plugins installed"),
+                    onClick = { showPlugins = true },
+                )
+            }
+            item { HorizontalDivider() }
+            item { SettingsHeader(ppText(language, "应用", "App")) }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Palette,
+                    title = ppText(language, "外观", "Appearance"),
+                    value = settings.theme.label(language),
+                    onClick = { showTheme = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Language,
+                    title = ppText(language, "语言", "Language"),
+                    value = settings.language.label(),
+                    onClick = { showLanguage = true },
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("PocketPilot") },
+                    supportingContent = {
+                        Text(
+                            ppText(
+                                language,
+                                "密钥由 Android Keystore 加密；不会进入项目、日志或 Git。",
+                                "Secrets are encrypted by Android Keystore and never enter projects, logs, or Git.",
+                            ),
+                        )
+                    },
+                    leadingContent = { Icon(Icons.Default.Settings, contentDescription = null) },
+                )
+            }
+        }
+    }
+
+    editableSetting?.let { field ->
+        EditableSettingDialog(
+            field = field,
+            settings = settings,
+            onDismiss = { editableSetting = null },
+            onSave = { value ->
+                editableSetting = null
+                onSettingsChange(
+                    when (field) {
+                        EditableSetting.PERSONALIZATION -> settings.copy(personalization = value)
+                    },
+                )
+            },
+        )
+    }
+
+    if (showModelSettings) {
+        ModelSettingsDialog(
+            settings = settings,
+            credentialConfigured = llmCredentialConfigured,
+            onDismiss = { showModelSettings = false },
+            onSave = { updated, secret ->
+                showModelSettings = false
+                onSettingsChange(updated)
+                secret?.takeIf { it.isNotBlank() }?.let(onSaveLlmCredential)
+            },
+            onRemoveCredential = {
+                showModelSettings = false
+                onRemoveLlmCredential()
+            },
+        )
+    }
+
+    if (showGitCredential) {
+        CredentialDialog(
+            language = language,
+            title = ppText(language, "Git HTTPS Token", "Git HTTPS token"),
+            configured = gitCredentialConfigured,
+            onDismiss = { showGitCredential = false },
+            onSave = {
+                showGitCredential = false
+                onSaveGitCredential(it)
+            },
+            onRemove = {
+                showGitCredential = false
+                onRemoveGitCredential()
+            },
+        )
+    }
+
+    if (showRemoteServers) {
+        RemoteServersDialog(
+            language = language,
+            servers = remoteServers,
+            onDismiss = { showRemoteServers = false },
+            onSave = onSaveRemoteServer,
+            onDelete = onDeleteRemoteServer,
+        )
+    }
+
+    if (showTools) {
+        ToolSettingsDialog(
+            language = language,
+            enabled = settings.toolsEnabled,
+            onEnabledChange = { onSettingsChange(settings.copy(toolsEnabled = it)) },
+            onDismiss = { showTools = false },
+        )
+    }
+
+    if (showPlugins) {
+        PluginInfoDialog(
+            language = language,
+            onDismiss = { showPlugins = false },
+        )
+    }
+
+    if (showTheme) {
+        ChoiceDialog(
+            title = ppText(language, "外观", "Appearance"),
+            choices = ThemePreference.entries,
+            selected = settings.theme,
+            label = { it.label(language) },
+            onSelect = {
+                showTheme = false
+                onSettingsChange(settings.copy(theme = it))
+            },
+            onDismiss = { showTheme = false },
+        )
+    }
+
+    if (showLanguage) {
+        ChoiceDialog(
+            title = ppText(language, "语言", "Language"),
+            choices = AppLanguage.entries,
+            selected = settings.language,
+            label = { it.label() },
+            onSelect = {
+                showLanguage = false
+                onSettingsChange(settings.copy(language = it))
+            },
+            onDismiss = { showLanguage = false },
+        )
+    }
+}
+
+@Composable
+private fun SettingsHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp),
+    )
+}
+
+@Composable
+private fun SettingsValueRow(
+    icon: ImageVector,
+    title: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(title) },
+        supportingContent = { Text(value, maxLines = 2) },
+        leadingContent = { Icon(icon, contentDescription = null) },
+    )
+}
+
+@Composable
+private fun SettingsToggleRow(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    ListItem(
+        modifier = Modifier.clickable { onCheckedChange(!checked) },
+        headlineContent = { Text(title) },
+        supportingContent = { Text(description) },
+        leadingContent = { Icon(icon, contentDescription = null) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
+    )
+}
+
+@Composable
+private fun EditableSettingDialog(
+    field: EditableSetting,
+    settings: PocketPilotSettings,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    val language = settings.language
+    val initial = when (field) {
+        EditableSetting.PERSONALIZATION -> settings.personalization
+    }
+    var value by rememberSaveable(field) { mutableStateOf(initial) }
+    val title = when (field) {
+        EditableSetting.PERSONALIZATION -> ppText(
+            language,
+            "个性化 / 灵魂提示词",
+            "Personalization / system prompt",
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it.take(if (field == EditableSetting.PERSONALIZATION) 4_000 else 240)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = if (field == EditableSetting.PERSONALIZATION) 4 else 1,
+                    maxLines = if (field == EditableSetting.PERSONALIZATION) 8 else 2,
+                    label = { Text(title) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(value.trim()) }) {
+                Text(ppText(language, "保存", "Save"))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(ppText(language, "取消", "Cancel")) }
+        },
+    )
+}
+
+@Composable
+private fun <T> ChoiceDialog(
+    title: String,
+    choices: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                choices.forEach { choice ->
+                    ListItem(
+                        modifier = Modifier.clickable { onSelect(choice) },
+                        headlineContent = { Text(label(choice)) },
+                        leadingContent = {
+                            RadioButton(selected = choice == selected, onClick = { onSelect(choice) })
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+    )
+}
+
+@Composable
+private fun ModelSettingsDialog(
+    settings: PocketPilotSettings,
+    credentialConfigured: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (PocketPilotSettings, String?) -> Unit,
+    onRemoveCredential: () -> Unit,
+) {
+    val language = settings.language
+    var protocol by rememberSaveable { mutableStateOf(settings.llmProtocol) }
+    var model by rememberSaveable { mutableStateOf(settings.modelName) }
+    var baseUrl by rememberSaveable { mutableStateOf(settings.llmBaseUrl) }
+    // Never persist credentials through SavedState/Bundle. This state exists
+    // only while the dialog is composed and is cleared before every exit.
+    var secret by remember { mutableStateOf("") }
+    val clearAndDismiss = {
+        secret = ""
+        onDismiss()
+    }
+    AlertDialog(
+        onDismissRequest = clearAndDismiss,
+        title = { Text(ppText(language, "模型连接", "Model connection")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(ppText(language, "协议", "Protocol"), style = MaterialTheme.typography.labelLarge)
+                LlmProtocolPreference.entries.forEach { choice ->
+                    ListItem(
+                        modifier = Modifier.clickable {
+                            protocol = choice
+                            baseUrl = choice.defaultBaseUrl()
+                        },
+                        headlineContent = { Text(choice.label(language)) },
+                        leadingContent = {
+                            RadioButton(
+                                selected = protocol == choice,
+                                onClick = {
+                                    protocol = choice
+                                    baseUrl = choice.defaultBaseUrl()
+                                },
+                            )
+                        },
+                    )
+                }
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it.take(2_048) },
+                    label = { Text("Base URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it.take(160) },
+                    label = { Text(ppText(language, "模型编码", "Model code")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it.take(16_384) },
+                    label = {
+                        Text(
+                            if (credentialConfigured) {
+                                ppText(language, "新 API Key（留空则不更改）", "New API key (blank keeps current)")
+                            } else {
+                                "API Key"
+                            },
+                        )
+                    },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = model.isNotBlank() && baseUrl.startsWith("https://"),
+                onClick = {
+                    val submittedSecret = secret.takeIf { it.isNotBlank() }
+                    secret = ""
+                    onSave(
+                        settings.copy(
+                            modelName = model.trim(),
+                            llmProtocol = protocol,
+                            llmBaseUrl = baseUrl.trim(),
+                        ),
+                        submittedSecret,
+                    )
+                },
+            ) { Text(ppText(language, "保存", "Save")) }
+        },
+        dismissButton = {
+            Row {
+                if (credentialConfigured) {
+                    TextButton(onClick = {
+                        secret = ""
+                        onRemoveCredential()
+                    }) {
+                        Text(ppText(language, "移除密钥", "Remove key"))
+                    }
+                }
+                TextButton(onClick = clearAndDismiss) { Text(ppText(language, "取消", "Cancel")) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun CredentialDialog(
+    language: AppLanguage,
+    title: String,
+    configured: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    var secret by remember { mutableStateOf("") }
+    val clearAndDismiss = {
+        secret = ""
+        onDismiss()
+    }
+    AlertDialog(
+        onDismissRequest = clearAndDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (configured) {
+                        ppText(language, "凭据已配置。输入新值可替换。", "A credential is configured. Enter a new value to replace it.")
+                    } else {
+                        ppText(language, "只保存在本机加密存储中。", "Stored only in encrypted device storage.")
+                    },
+                )
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it.take(16_384) },
+                    label = { Text(title) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = secret.isNotBlank(),
+                onClick = {
+                    val submittedSecret = secret
+                    secret = ""
+                    onSave(submittedSecret)
+                },
+            ) { Text(ppText(language, "保存", "Save")) }
+        },
+        dismissButton = {
+            Row {
+                if (configured) {
+                    TextButton(onClick = {
+                        secret = ""
+                        onRemove()
+                    }) {
+                        Text(ppText(language, "移除", "Remove"))
+                    }
+                }
+                TextButton(onClick = clearAndDismiss) { Text(ppText(language, "取消", "Cancel")) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun RemoteServersDialog(
+    language: AppLanguage,
+    servers: List<RemoteServerProfile>,
+    onDismiss: () -> Unit,
+    onSave: (RemoteServerProfile, String?) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var editing by remember { mutableStateOf<RemoteServerProfile?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(ppText(language, "远程服务器", "Remote servers")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (servers.isEmpty()) {
+                    Text(ppText(language, "尚未配置服务器。", "No servers configured."))
+                }
+                servers.forEach { server ->
+                    ListItem(
+                        modifier = Modifier.clickable { editing = server },
+                        headlineContent = { Text(server.name) },
+                        supportingContent = { Text("${server.username}@${server.host}:${server.port}") },
+                        trailingContent = {
+                            IconButton(onClick = { onDelete(server.id) }) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = ppText(language, "删除", "Delete"),
+                                )
+                            }
+                        },
+                    )
+                }
+                Button(
+                    onClick = {
+                        val id = UUID.randomUUID().toString()
+                        editing = RemoteServerProfile(
+                            id = id,
+                            name = "",
+                            host = "",
+                            username = "",
+                            hostKeyFingerprint = "",
+                            credentialId = "ssh.$id",
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(ppText(language, "添加服务器", "Add server"))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(ppText(language, "完成", "Done")) }
+        },
+    )
+
+    editing?.let { server ->
+        RemoteServerEditorDialog(
+            language = language,
+            initial = server,
+            onDismiss = { editing = null },
+            onSave = { updated, secret ->
+                editing = null
+                onSave(updated, secret)
+            },
+        )
+    }
+}
+
+@Composable
+private fun RemoteServerEditorDialog(
+    language: AppLanguage,
+    initial: RemoteServerProfile,
+    onDismiss: () -> Unit,
+    onSave: (RemoteServerProfile, String?) -> Unit,
+) {
+    var name by rememberSaveable(initial.id) { mutableStateOf(initial.name) }
+    var host by rememberSaveable(initial.id) { mutableStateOf(initial.host) }
+    var port by rememberSaveable(initial.id) { mutableStateOf(initial.port.toString()) }
+    var username by rememberSaveable(initial.id) { mutableStateOf(initial.username) }
+    var authType by rememberSaveable(initial.id) { mutableStateOf(initial.authType) }
+    var fingerprint by rememberSaveable(initial.id) { mutableStateOf(initial.hostKeyFingerprint) }
+    var description by rememberSaveable(initial.id) { mutableStateOf(initial.description) }
+    var secret by remember(initial.id) { mutableStateOf("") }
+    val clearAndDismiss = {
+        secret = ""
+        onDismiss()
+    }
+    val parsedPort = port.toIntOrNull()
+    val valid = name.isNotBlank() && host.isNotBlank() && username.isNotBlank() &&
+        parsedPort != null && parsedPort in 1..65535 && fingerprint.startsWith("SHA256:") &&
+        (initial.hasCredential || secret.isNotBlank())
+
+    AlertDialog(
+        onDismissRequest = clearAndDismiss,
+        title = { Text(ppText(language, "SSH 服务器", "SSH server")) },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it.take(120) },
+                        label = { Text(ppText(language, "名称", "Name")) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = host,
+                        onValueChange = { host = it.take(253) },
+                        label = { Text("Host") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = port,
+                            onValueChange = { port = it.filter(Char::isDigit).take(5) },
+                            label = { Text("Port") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(0.35f),
+                        )
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it.take(128) },
+                            label = { Text(ppText(language, "用户名", "Username")) },
+                            modifier = Modifier.weight(0.65f),
+                        )
+                    }
+                }
+                item {
+                    Row {
+                        SshAuthType.entries.forEach { choice ->
+                            TextButton(onClick = { authType = choice }) {
+                                RadioButton(selected = authType == choice, onClick = { authType = choice })
+                                Text(choice.label(language))
+                            }
+                        }
+                    }
+                }
+                item {
+                    OutlinedTextField(
+                        value = fingerprint,
+                        onValueChange = { fingerprint = it.trim().take(80) },
+                        label = { Text("Host key SHA256 fingerprint") },
+                        supportingText = { Text("SHA256:…") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = secret,
+                        onValueChange = { secret = it.take(16_384) },
+                        label = {
+                            Text(
+                                if (initial.hasCredential) {
+                                    ppText(language, "新凭据（留空不更改）", "New credential (blank keeps current)")
+                                } else if (authType == SshAuthType.PASSWORD) {
+                                    ppText(language, "密码", "Password")
+                                } else {
+                                    ppText(
+                                        language,
+                                        "未加密 PEM/OpenSSH 私钥",
+                                        "Unencrypted PEM/OpenSSH private key",
+                                    )
+                                },
+                            )
+                        },
+                        visualTransformation = PasswordVisualTransformation(),
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it.take(4_096) },
+                        label = { Text(ppText(language, "用途说明", "Description")) },
+                        maxLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = valid,
+                onClick = {
+                    val submittedSecret = secret.takeIf { it.isNotBlank() }
+                    secret = ""
+                    onSave(
+                        initial.copy(
+                            name = name.trim(),
+                            host = host.trim(),
+                            port = checkNotNull(parsedPort),
+                            username = username.trim(),
+                            authType = authType,
+                            hostKeyFingerprint = fingerprint.trim(),
+                            description = description.trim(),
+                        ),
+                        submittedSecret,
+                    )
+                },
+            ) { Text(ppText(language, "保存", "Save")) }
+        },
+        dismissButton = {
+            TextButton(onClick = clearAndDismiss) { Text(ppText(language, "取消", "Cancel")) }
+        },
+    )
+}
+
+@Composable
+private fun ToolSettingsDialog(
+    language: AppLanguage,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val groups = listOf(
+        "Workspace" to listOf(
+            "workspace.list", "workspace.read", "workspace.write", "workspace.create",
+            "workspace.delete", "workspace.move", "workspace.search", "workspace.patch",
+        ),
+        "Git" to listOf(
+            "git.init", "git.clone", "git.status", "git.diff", "git.commit", "git.pull", "git.push",
+        ),
+        "SSH" to listOf("ssh.execute"),
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(ppText(language, "工具列表", "Tools")) },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    ListItem(
+                        headlineContent = { Text(ppText(language, "允许 Agent 使用工具", "Allow Agent tools")) },
+                        supportingContent = {
+                            Text(
+                                ppText(
+                                    language,
+                                    "停用后 Agent 只能对话；远程和危险操作始终还要逐次确认。",
+                                    "When disabled the Agent can only chat. Remote and risky calls always need one-time approval.",
+                                ),
+                            )
+                        },
+                        trailingContent = {
+                            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+                        },
+                    )
+                }
+                groups.forEach { (group, tools) ->
+                    item {
+                        Text(
+                            group,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    items(tools.size) { index ->
+                        Text(
+                            tools[index],
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(ppText(language, "完成", "Done")) }
+        },
+    )
+}
+
+@Composable
+private fun PluginInfoDialog(
+    language: AppLanguage,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(ppText(language, "插件", "Plugins")) },
+        text = {
+            Text(
+                ppText(
+                    language,
+                    "当前版本未安装插件。后续插件会在这里显示来源、权限和启用状态；未安装的插件不能执行。",
+                    "No plugins are installed. Future plugins will show their source, permissions, and enabled state here; uninstalled plugins cannot run.",
+                ),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(ppText(language, "完成", "Done")) }
+        },
+    )
+}
+
+private fun ThemePreference.label(language: AppLanguage): String = when (this) {
+    ThemePreference.SYSTEM -> ppText(language, "跟随系统", "System")
+    ThemePreference.LIGHT -> ppText(language, "浅色", "Light")
+    ThemePreference.DARK -> ppText(language, "深色", "Dark")
+}
+
+private fun AppLanguage.label(): String = when (this) {
+    AppLanguage.CHINESE -> "中文"
+    AppLanguage.ENGLISH -> "English"
+}
+
+private fun LlmProtocolPreference.label(language: AppLanguage): String = when (this) {
+    LlmProtocolPreference.CHAT_COMPLETIONS -> "Chat Completions"
+    LlmProtocolPreference.RESPONSES -> "Responses"
+}
+
+private fun LlmProtocolPreference.defaultBaseUrl(): String = when (this) {
+    LlmProtocolPreference.CHAT_COMPLETIONS -> "https://open.bigmodel.cn/api/coding/paas/v4"
+    LlmProtocolPreference.RESPONSES -> "https://open.bigmodel.cn/api/v1"
+}
+
+private fun SshAuthType.label(language: AppLanguage): String = when (this) {
+    SshAuthType.PASSWORD -> ppText(language, "密码", "Password")
+    SshAuthType.PRIVATE_KEY -> ppText(language, "私钥", "Private key")
+}

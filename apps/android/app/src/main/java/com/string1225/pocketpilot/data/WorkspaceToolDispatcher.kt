@@ -26,22 +26,26 @@ class WorkspaceToolDispatcher(
             requireAuthorized(request)
             val arguments = JSONObject(request.argumentsJson)
             val data = when (request.name) {
-                "workspace.list" -> list(request.projectId, arguments)
-                "workspace.read" -> read(request.projectId, arguments)
-                "workspace.write" -> write(request.projectId, arguments, createOnly = false)
-                "workspace.create" -> write(request.projectId, arguments, createOnly = true)
-                "workspace.delete" -> delete(request, arguments)
-                "workspace.move" -> move(request.projectId, arguments)
-                "workspace.search" -> search(request.projectId, arguments)
-                "workspace.patch" -> patch(request.projectId, arguments)
+                "workspace.list" -> arguments.withOnlyKeys("path") { list(request.projectId, this) }
+                "workspace.read" -> arguments.withOnlyKeys("path") { read(request.projectId, this) }
+                "workspace.write" -> arguments.withOnlyKeys("path", "content") {
+                    write(request.projectId, this, createOnly = false)
+                }
+                "workspace.create" -> arguments.withOnlyKeys("path", "content") {
+                    write(request.projectId, this, createOnly = true)
+                }
+                "workspace.delete" -> arguments.withOnlyKeys("path") { delete(request, this) }
+                "workspace.move" -> arguments.withOnlyKeys("from", "to") { move(request.projectId, this) }
+                "workspace.search" -> arguments.withOnlyKeys("query", "limit") { search(request.projectId, this) }
+                "workspace.patch" -> arguments.withOnlyKeys(
+                    "path",
+                    "oldText",
+                    "newText",
+                    "expectedOccurrences",
+                ) { patch(request.projectId, this) }
                 else -> throw ToolDispatchException("UNKNOWN_TOOL", "Unknown Native Tool: ${request.name}")
             }
-            NativeToolResult(
-                JSONObject()
-                    .put("success", true)
-                    .put("data", data)
-                    .toString(),
-            )
+            boundedNativeToolSuccess(data)
         } catch (error: ToolDispatchException) {
             throw error
         } catch (error: JSONException) {
@@ -85,23 +89,34 @@ class WorkspaceToolDispatcher(
     }
 
     private fun list(projectId: String, arguments: JSONObject): JSONObject {
-        val rawPath = arguments.optString("path").trim().replace('\\', '/').trim('/')
+        val rawPath = if (arguments.has("path")) {
+            arguments.requiredString("path", allowEmpty = true)
+        } else {
+            ""
+        }.trim().replace('\\', '/').trim('/')
         val requestedPath = if (rawPath.isEmpty() || rawPath == ".") "" else WorkspacePath.normalize(rawPath)
         val entries = workspace.list(projectId)
             .filter { requestedPath.isEmpty() || it.path == requestedPath || it.path.startsWith("$requestedPath/") }
-        return JSONObject().put(
-            "entries",
-            JSONArray().apply {
-                entries.forEach { entry ->
-                    put(
-                        JSONObject()
-                            .put("path", entry.path)
-                            .put("size", entry.size)
-                            .put("modifiedAt", entry.modifiedAt),
-                    )
-                }
-            },
-        )
+        val budget = SerializedJsonBudget()
+        val encodedEntries = JSONArray()
+        for (entry in entries) {
+            if (
+                !budget.tryPut(
+                    encodedEntries,
+                    JSONObject()
+                        .put("path", entry.path)
+                        .put("size", entry.size)
+                        .put("modifiedAt", entry.modifiedAt),
+                )
+            ) {
+                break
+            }
+        }
+        return JSONObject()
+            .put("entries", encodedEntries)
+            .put("totalEntries", entries.size)
+            .put("returnedEntries", budget.acceptedEntries)
+            .put("truncated", budget.acceptedEntries < entries.size)
     }
 
     private fun read(projectId: String, arguments: JSONObject): JSONObject {
@@ -131,7 +146,8 @@ class WorkspaceToolDispatcher(
 
     private fun search(projectId: String, arguments: JSONObject): JSONObject {
         val query = arguments.requiredString("query")
-        val limit = if (arguments.has("limit")) arguments.getInt("limit") else 100
+        val limit = arguments.intOrDefault("limit", 100)
+        require(limit in 1..500) { "limit must be in 1..500" }
         val matches = workspace.search(projectId, query, limit)
         return JSONObject().put(
             "matches",
@@ -152,11 +168,7 @@ class WorkspaceToolDispatcher(
         val path = arguments.requiredString("path")
         val oldText = arguments.requiredString("oldText")
         val newText = arguments.requiredString("newText", allowEmpty = true)
-        val expectedOccurrences = if (arguments.has("expectedOccurrences")) {
-            arguments.getInt("expectedOccurrences")
-        } else {
-            1
-        }
+        val expectedOccurrences = arguments.intOrDefault("expectedOccurrences", 1)
         require(expectedOccurrences == 1) { "MVP patch requires expectedOccurrences = 1" }
         val checkpoint = workspace.patch(
             projectId = projectId,
@@ -180,5 +192,29 @@ class WorkspaceToolDispatcher(
         require(value is String) { "$key must be a string" }
         require(allowEmpty || value.isNotEmpty()) { "$key must not be empty" }
         return value
+    }
+
+    private inline fun <T> JSONObject.withOnlyKeys(vararg allowed: String, block: JSONObject.() -> T): T {
+        val allowedSet = allowed.toSet()
+        val keys = keys()
+        while (keys.hasNext()) {
+            require(keys.next() in allowedSet) { "Unknown argument" }
+        }
+        return block()
+    }
+
+    private fun JSONObject.intOrDefault(key: String, default: Int): Int {
+        if (!has(key)) return default
+        require(!isNull(key)) { "$key must be an integer" }
+        return when (val value = get(key)) {
+            is Byte -> value.toInt()
+            is Short -> value.toInt()
+            is Int -> value
+            is Long -> {
+                require(value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) { "$key is outside integer range" }
+                value.toInt()
+            }
+            else -> throw IllegalArgumentException("$key must be an integer")
+        }
     }
 }

@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.string1225.pocketpilot.model.ThemePreference
 
 private val PocketPilotLightColors = lightColorScheme(
     primary = Color(0xFF315DA8),
@@ -36,9 +37,17 @@ private val PocketPilotDarkColors = darkColorScheme(
 )
 
 @Composable
-fun PocketPilotTheme(content: @Composable () -> Unit) {
+fun PocketPilotTheme(
+    preference: ThemePreference = ThemePreference.SYSTEM,
+    content: @Composable () -> Unit,
+) {
+    val useDarkColors = when (preference) {
+        ThemePreference.SYSTEM -> isSystemInDarkTheme()
+        ThemePreference.LIGHT -> false
+        ThemePreference.DARK -> true
+    }
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) PocketPilotDarkColors else PocketPilotLightColors,
+        colorScheme = if (useDarkColors) PocketPilotDarkColors else PocketPilotLightColors,
         content = content,
     )
 }

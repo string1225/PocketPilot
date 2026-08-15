@@ -13,11 +13,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AssistChip
@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.string1225.pocketpilot.model.AgentRunStatus
+import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 
@@ -47,6 +48,7 @@ fun AgentScreen(
     status: AgentRunStatus,
     offlineDemo: Boolean,
     runtimeAvailable: Boolean,
+    language: AppLanguage,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
@@ -67,32 +69,56 @@ fun AgentScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Agent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    ppText(language, "聊天", "Chat"),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Text(
                     when {
-                        !runtimeAvailable -> "Runtime 不可用 · Repository-only fallback"
-                        offlineDemo -> "本地指令 Provider · Workspace Tool 会真实执行"
-                        else -> "Tool calling timeline"
+                        !runtimeAvailable -> ppText(
+                            language,
+                            "Runtime 不可用 · 仅仓储降级模式",
+                            "Runtime unavailable · repository-only fallback",
+                        )
+                        offlineDemo -> ppText(
+                            language,
+                            "本地指令 Provider · Workspace 工具会真实执行",
+                            "Local provider · Workspace tools execute for real",
+                        )
+                        else -> ppText(language, "工具调用时间线", "Tool-calling timeline")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            AssistChip(onClick = {}, label = { Text(status.label()) })
+            AssistChip(onClick = {}, label = { Text(status.label(language)) })
         }
 
         if (timeline.isEmpty()) {
             EmptyState(
                 icon = Icons.Default.SmartToy,
                 title = when {
-                    !runtimeAvailable -> "Agent Runtime 当前不可用"
-                    offlineDemo -> "体验离线 Agent 时间线"
-                    else -> "开始一个 Agent Run"
+                    !runtimeAvailable -> ppText(language, "Agent Runtime 当前不可用", "Agent Runtime is unavailable")
+                    offlineDemo -> ppText(language, "开始一段本地会话", "Start a local chat")
+                    else -> ppText(language, "开始一个 Agent Run", "Start an Agent run")
                 },
                 body = when {
-                    !runtimeAvailable -> "本地 Project、Files 和 Checkpoints 不受影响；更新 Android System WebView 后重启 App 再试。"
-                    offlineDemo -> "输入 /list，或 /create path | content。任务会经过真实 TypeScript Agent Loop 和 Native Tool，但不会向外发送数据。"
-                    else -> "描述目标，Agent 将在当前 Project 的授权范围内工作。"
+                    !runtimeAvailable -> ppText(
+                        language,
+                        "本地项目、文件和 Checkpoints 不受影响；更新 Android System WebView 后重启应用再试。",
+                        "Local projects, files, and checkpoints still work. Update Android System WebView and restart the app.",
+                    )
+                    offlineDemo -> ppText(
+                        language,
+                        "输入 /list，或 /create path | content。消息和 Agent 结果会保存在当前会话中。",
+                        "Try /list or /create path | content. Messages and Agent results are saved in this chat.",
+                    )
+                    else -> ppText(
+                        language,
+                        "描述目标，Agent 将在当前项目的授权范围内工作。",
+                        "Describe a goal and the Agent will work within the selected project's permissions.",
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -119,7 +145,7 @@ fun AgentScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 Icon(Icons.Default.Stop, contentDescription = null)
-                Text("停止 Run", modifier = Modifier.padding(start = 6.dp))
+                Text(ppText(language, "停止 Run", "Stop run"), modifier = Modifier.padding(start = 6.dp))
             }
         }
 
@@ -134,14 +160,22 @@ fun AgentScreen(
                 value = input,
                 onValueChange = onInputChange,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(if (offlineDemo) "例如：/create notes/a.md | hello" else "告诉 Agent 要完成什么…") },
+                placeholder = {
+                    Text(
+                        if (offlineDemo) {
+                            ppText(language, "例如：/create notes/a.md | hello", "Example: /create notes/a.md | hello")
+                        } else {
+                            ppText(language, "告诉 Agent 要完成什么…", "Tell the Agent what to do…")
+                        },
+                    )
+                },
                 maxLines = 5,
                 enabled = !active,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { if (input.isNotBlank() && !active) onSend() }),
             )
             FilledIconButton(onClick = onSend, enabled = input.isNotBlank() && !active) {
-                Icon(Icons.Default.Send, contentDescription = "发送任务")
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = ppText(language, "发送消息", "Send message"))
             }
         }
     }
@@ -180,13 +214,13 @@ private fun TimelineCard(item: TimelineItem) {
     }
 }
 
-private fun AgentRunStatus.label(): String = when (this) {
-    AgentRunStatus.IDLE -> "待命"
-    AgentRunStatus.RUNNING -> "运行中"
-    AgentRunStatus.WAITING_FOR_APPROVAL -> "等待确认"
-    AgentRunStatus.COMPLETED -> "已完成"
-    AgentRunStatus.FAILED -> "失败"
-    AgentRunStatus.CANCELLED -> "已取消"
+private fun AgentRunStatus.label(language: AppLanguage): String = when (this) {
+    AgentRunStatus.IDLE -> ppText(language, "待命", "Ready")
+    AgentRunStatus.RUNNING -> ppText(language, "运行中", "Running")
+    AgentRunStatus.WAITING_FOR_APPROVAL -> ppText(language, "等待确认", "Awaiting approval")
+    AgentRunStatus.COMPLETED -> ppText(language, "已完成", "Completed")
+    AgentRunStatus.FAILED -> ppText(language, "失败", "Failed")
+    AgentRunStatus.CANCELLED -> ppText(language, "已取消", "Cancelled")
 }
 
 private fun TimelineItemKind.icon(): ImageVector = when (this) {

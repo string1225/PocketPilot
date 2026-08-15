@@ -1,10 +1,10 @@
 package com.string1225.pocketpilot.data
 
 import android.content.ContentValues
+import android.database.Cursor
 import com.string1225.pocketpilot.model.Checkpoint
 import com.string1225.pocketpilot.model.CheckpointSource
 import java.io.File
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -173,7 +173,17 @@ class CheckpointRepository(
             "path ASC",
         ).use { cursor ->
             while (cursor.moveToNext()) {
-                files += SnapshotFile(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3))
+                val content = when (cursor.getType(1)) {
+                    Cursor.FIELD_TYPE_BLOB -> cursor.getBlob(1)
+                    Cursor.FIELD_TYPE_STRING -> cursor.getString(1).toByteArray(Charsets.UTF_8)
+                    else -> throw IllegalStateException("Checkpoint file content is invalid")
+                }
+                val hash = cursor.getString(2)
+                val size = cursor.getLong(3)
+                require(content.size.toLong() == size && sha256(content) == hash) {
+                    "Checkpoint file content is corrupted"
+                }
+                files += SnapshotFile(cursor.getString(0), content, hash, size)
             }
         }
         return files
@@ -182,7 +192,7 @@ class CheckpointRepository(
     private fun snapshotWorkspace(projectId: String): List<SnapshotFile> {
         val workspace = ProjectPaths.workspaceDirectory(projectsRoot, projectId)
         if (!workspace.exists()) return emptyList()
-        return workspace.walkTopDown()
+        val candidates = workspace.walkTopDown()
             .onEnter { directory ->
                 directory == workspace || (
                     !Files.isSymbolicLink(directory.toPath()) &&
@@ -194,24 +204,32 @@ class CheckpointRepository(
                     !Files.isSymbolicLink(it.toPath()) &&
                     !isInternalPath(it.relativeTo(workspace).invariantSeparatorsPath)
             }
-            .map { file ->
-                require(file.length() <= MAX_TEXT_FILE_BYTES) { "File is too large for a checkpoint: ${file.name}" }
-                val bytes = file.readBytes()
-                require(bytes.none { it == 0.toByte() }) { "Binary files are not supported yet: ${file.name}" }
-                SnapshotFile(
-                    path = file.relativeTo(workspace).invariantSeparatorsPath,
-                    content = bytes.toString(StandardCharsets.UTF_8),
-                    hash = sha256(bytes),
-                    size = bytes.size.toLong(),
-                )
-            }
-            .sortedBy { it.path }
+            .sortedBy { it.relativeTo(workspace).invariantSeparatorsPath }
             .toList()
+        var totalBytes = 0L
+        return candidates.map { file ->
+            require(file.length() <= MAX_CHECKPOINT_FILE_BYTES) {
+                "File is too large for a checkpoint: ${file.name}"
+            }
+            val bytes = file.readBytes()
+            require(bytes.size.toLong() <= MAX_CHECKPOINT_FILE_BYTES) {
+                "File changed while creating checkpoint: ${file.name}"
+            }
+            totalBytes += bytes.size
+            require(totalBytes <= MAX_CHECKPOINT_TOTAL_BYTES) { "Workspace is too large for a checkpoint" }
+            SnapshotFile(
+                path = file.relativeTo(workspace).invariantSeparatorsPath,
+                content = bytes,
+                hash = sha256(bytes),
+                size = bytes.size.toLong(),
+            )
+        }
+            .sortedBy { it.path }
     }
 
-    private fun atomicWrite(destination: File, content: String) {
+    private fun atomicWrite(destination: File, content: ByteArray) {
         val temporary = File(destination.parentFile, ".${destination.name}.${UUID.randomUUID()}.tmp")
-        temporary.writeText(content, StandardCharsets.UTF_8)
+        temporary.writeBytes(content)
         try {
             Files.move(
                 temporary.toPath(),
@@ -236,10 +254,12 @@ class CheckpointRepository(
             it.equals(".agentdock", ignoreCase = true)
     }
 
-    private data class SnapshotFile(val path: String, val content: String, val hash: String, val size: Long)
+    private data class SnapshotFile(val path: String, val content: ByteArray, val hash: String, val size: Long)
 
     companion object {
         const val MAX_TEXT_FILE_BYTES = 1_048_576L
+        private const val MAX_CHECKPOINT_FILE_BYTES = 32L * 1024 * 1024
+        private const val MAX_CHECKPOINT_TOTAL_BYTES = 128L * 1024 * 1024
         private const val MAX_DESCRIPTION_LENGTH = 240
     }
 }

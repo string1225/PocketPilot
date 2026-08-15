@@ -63,7 +63,7 @@ internal class RuntimeAssetWebViewClient(
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
         RuntimeAssetUrlPolicy.assetPath(request.url.toString()) == null
 
-    @Suppress("DEPRECATION")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
         RuntimeAssetUrlPolicy.assetPath(url) == null
 
@@ -75,7 +75,7 @@ internal class RuntimeAssetWebViewClient(
         return assetResponse(request.url.toString())
     }
 
-    @Suppress("DEPRECATION")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse =
         assetResponse(url)
 

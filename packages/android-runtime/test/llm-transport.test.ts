@@ -1,0 +1,240 @@
+import { describe, expect, it } from "vitest";
+
+import type { ProviderRequest } from "@pocketpilot/agent-core";
+import {
+  DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+  DEFAULT_LLM_MODEL
+} from "@pocketpilot/providers";
+import { toolSuccess } from "@pocketpilot/tool-runtime";
+
+import {
+  AndroidAgentRuntime,
+  NativeLlmTransportError,
+  NativeRpcClient,
+  NativeRpcLlmTransport,
+  parseRuntimeStartRequest,
+  type ToolRequestEnvelope
+} from "../src/index.js";
+
+const providerRequest = (signal = new AbortController().signal): ProviderRequest => ({
+  runId: "run-llm",
+  projectId: "project-1",
+  step: 2,
+  signal,
+  messages: [
+    { role: "system", content: "Be precise." },
+    { role: "user", content: "Inspect the project." }
+  ],
+  tools: [
+    {
+      name: "workspace.read",
+      description: "Read a file.",
+      risk: "read",
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: false
+      }
+    }
+  ]
+});
+
+describe("native LLM transport", () => {
+  it("serializes only credential references and maps native tool calls", async () => {
+    let requestEnvelope: ToolRequestEnvelope | undefined;
+    let rpc: NativeRpcClient;
+    rpc = new NativeRpcClient({
+      postMessage: (json) => {
+        requestEnvelope = JSON.parse(json) as ToolRequestEnvelope;
+        queueMicrotask(() => {
+          rpc.receive(JSON.stringify({
+            version: 1,
+            id: requestEnvelope?.id,
+            type: "tool.result",
+            runId: requestEnvelope?.runId,
+            projectId: requestEnvelope?.projectId,
+            payload: toolSuccess({
+              content: "I will read it.",
+              toolCalls: [{
+                id: "call-1",
+                name: "workspace.read",
+                arguments: { path: "README.md" }
+              }]
+            })
+          }));
+        });
+      }
+    });
+
+    const result = await new NativeRpcLlmTransport(rpc).complete(
+      {
+        protocol: "chat_completions",
+        baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+        model: DEFAULT_LLM_MODEL,
+        credentialId: "credential-1"
+      },
+      providerRequest(),
+    );
+
+    expect(result).toEqual({
+      content: "I will read it.",
+      toolCalls: [{
+        id: "call-1",
+        name: "workspace.read",
+        arguments: { path: "README.md" }
+      }]
+    });
+    expect(requestEnvelope).toMatchObject({
+      type: "tool.request",
+      runId: "run-llm",
+      projectId: "project-1",
+      payload: {
+        name: "llm.complete",
+        arguments: {
+          protocol: "chat_completions",
+          baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+          model: DEFAULT_LLM_MODEL,
+          credentialId: "credential-1"
+        }
+      }
+    });
+    expect(JSON.stringify(requestEnvelope)).not.toMatch(/api[_-]?key|authorization/iu);
+    expect(JSON.stringify(requestEnvelope)).not.toContain("signal");
+  });
+
+  it("preserves structured native failures", async () => {
+    let rpc: NativeRpcClient;
+    rpc = new NativeRpcClient({
+      postMessage: (json) => {
+        const envelope = JSON.parse(json) as ToolRequestEnvelope;
+        queueMicrotask(() => rpc.receive(JSON.stringify({
+          version: 1,
+          id: envelope.id,
+          type: "tool.result",
+          runId: envelope.runId,
+          projectId: envelope.projectId,
+          payload: {
+            success: false,
+            error: {
+              code: "LLM_RATE_LIMITED",
+              message: "The model endpoint is rate limited.",
+              retryable: true
+            }
+          }
+        })));
+      }
+    });
+
+    const error = await new NativeRpcLlmTransport(rpc)
+      .complete(
+        {
+          protocol: "responses",
+          baseUrl: "https://open.bigmodel.cn/api/v1",
+          model: DEFAULT_LLM_MODEL,
+          credentialId: "credential-1"
+        },
+        providerRequest(),
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(NativeLlmTransportError);
+    expect(error).toMatchObject({ code: "LLM_RATE_LIMITED", retryable: true });
+  });
+});
+
+describe("runtime LLM provider selection", () => {
+  it("parses an OpenAI-compatible config while rejecting API key material", () => {
+    expect(parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-1",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        protocol: "responses",
+        credentialId: "credential-1"
+      }
+    }))).toMatchObject({
+      provider: {
+        type: "openai_compatible",
+        protocol: "responses",
+        credentialId: "credential-1"
+      }
+    });
+
+    expect(() => parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-1",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        credentialId: "credential-1",
+        apiKey: "must-not-cross-the-bridge"
+      }
+    }))).toThrow("must not be sent");
+
+    expect(() => parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-1",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        credentialId: "credential-1",
+        Authorization: "Bearer must-not-cross-the-bridge"
+      }
+    }))).toThrow("must not be sent");
+
+    expect(() => parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-1",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        credentialId: "credential-1",
+        unknown: "value"
+      }
+    }))).toThrow("unsupported field");
+  });
+
+  it("routes provider completion through llm.complete instead of fetch", async () => {
+    const envelopes: ToolRequestEnvelope[] = [];
+    let runtime: AndroidAgentRuntime;
+    runtime = new AndroidAgentRuntime({
+      postMessage: (json) => {
+        const envelope = JSON.parse(json) as ToolRequestEnvelope;
+        envelopes.push(envelope);
+        if (envelope.type === "tool.request" && envelope.payload.name === "llm.complete") {
+          queueMicrotask(() => runtime.receive(JSON.stringify({
+            version: 1,
+            id: envelope.id,
+            type: "tool.result",
+            runId: envelope.runId,
+            projectId: envelope.projectId,
+            payload: toolSuccess({ content: "Native model response" })
+          })));
+        }
+      }
+    });
+
+    const result = JSON.parse(await runtime.start(JSON.stringify({
+      runId: "run-native-llm",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        credentialId: "credential-1"
+      }
+    }))) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ status: "completed", output: "Native model response" });
+    const llmRequest = envelopes.find(
+      (envelope) => envelope.type === "tool.request" && envelope.payload.name === "llm.complete",
+    );
+    expect(llmRequest?.payload.arguments).toMatchObject({
+      protocol: "chat_completions",
+      baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+      model: DEFAULT_LLM_MODEL,
+      credentialId: "credential-1"
+    });
+  });
+});

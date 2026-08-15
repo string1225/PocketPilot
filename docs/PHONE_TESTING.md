@@ -1,41 +1,36 @@
-# PocketPilot Android 真机接入与测试指南
+# PocketPilot Android 模拟器与真机测试指南
 
-这份指南面向当前的 `0.1.0` 纵向切片。手机接入当前这台 Windows 电脑并被 `adb` 识别后，Codex 可以在同一个终端环境里继续执行构建、安装、启动、抓日志和回归测试；不需要把手机账号或屏幕控制权交给任何云服务。
+本指南覆盖本机 Android Studio 模拟器、USB 真机和 Android 11+ 无线调试。测试设备只需要连接运行 Codex 的这台 Windows 电脑；模型、Git 与 SSH 凭据都应在设备 UI 中录入，不要通过聊天、命令行参数或 `adb input text` 传递。
 
 ## 1. 电脑端准备
 
-### 推荐方式：Android Studio
+推荐安装 Android Studio，并在 `Tools > SDK Manager` 安装：
 
-1. 从 [Android Developers](https://developer.android.com/studio) 安装 Android Studio。
-2. 打开 `Tools > SDK Manager`。
-3. 在 `SDK Platforms` 安装 Android API 36。
-4. 在 `SDK Tools` 安装：
-   - Android SDK Build-Tools 36.0.0 或更新版本
-   - Android SDK Platform-Tools（包含 `adb`）
-   - Android SDK Command-line Tools
-5. 在 Android Studio 中接受由 SDK Manager 展示的许可协议。
+- Android SDK Platform 36
+- Android SDK Build-Tools 36.0.0
+- Android SDK Platform-Tools
+- Android SDK Command-line Tools
+- Android Emulator 与一个 API 36 x86_64 system image（仅模拟器需要）
 
-项目固定使用 AGP 9.3.0、Gradle 9.5.0 和 JDK 17。Android Studio 自带的 JBR/JDK 通常可以直接作为 Gradle JDK；官方兼容表也要求 AGP 9.3 使用 JDK 17。
-
-确认命令可用：
+PocketPilot 使用 JDK 17。可以直接复用 Android Studio 自带 JBR：
 
 ```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+$env:Path += ";$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME\emulator"
+
 java -version
 adb version
-node --version
-pnpm --version
 ```
 
-如果 `adb` 未加入 PATH，可以在当前 PowerShell 临时加入：
+如果 SDK 不在默认目录，在 `apps/android/local.properties` 写入本机路径。该文件已被 Git 忽略：
 
-```powershell
-$env:Path += ";$env:LOCALAPPDATA\Android\Sdk\platform-tools"
-adb version
+```properties
+sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
 ```
 
-官方说明：[SDK Manager](https://developer.android.com/studio/intro/update)、[Platform Tools](https://developer.android.com/tools/releases/platform-tools)。
-
-## 2. 构建首版 APK
+## 2. 构建与自动测试
 
 在仓库根目录执行：
 
@@ -45,41 +40,56 @@ git pull --ff-only origin dev
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
-pnpm build
-```
 
-如果 Android SDK 不在默认位置，在 `apps/android/local.properties` 写本机路径；该文件已被 Git 忽略，不要提交：
-
-```properties
-sdk.dir=C\:\\Users\\junte\\AppData\\Local\\Android\\Sdk
-```
-
-构建并运行 Android 单元测试：
-
-```powershell
 Push-Location apps\android
-.\gradlew.bat testDebugUnitTest
-.\gradlew.bat assembleDebug
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
 Pop-Location
 ```
 
-APK 路径：
+APK：
 
 ```text
 apps\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-也可以用 Android Studio 直接打开仓库中的 `apps\android` 目录，等待 Gradle Sync 完成。
+## 3. 本机模拟器
 
-## 3. 用 USB 连接手机
+Android Studio 中打开 `Tools > Device Manager`，创建并启动 API 36 设备。当前开发环境使用的 AVD 名称是：
 
-1. 手机进入“设置 > 关于手机”，连续点击“版本号”约 7 次，启用开发者选项。
-2. 打开“开发者选项 > USB 调试”。部分品牌还需要开启“USB 调试（安全设置）”。
-3. 使用支持数据传输的 USB 线连接电脑；USB 用途选择“文件传输”。
-4. 手机弹出 RSA 指纹确认时，核对后选择“允许这台电脑进行调试”。
-5. Windows 若无法识别设备，安装手机厂商 OEM USB Driver，或使用 Android Studio 的 `Tools > Troubleshoot Device Connections`。
+```text
+PocketPilot_API_36
+```
 
-验证：
+也可以命令行启动：
+
+```powershell
+emulator -avd PocketPilot_API_36
+adb wait-for-device
+adb devices -l
+```
+
+安装并运行测试：
+
+```powershell
+adb install -r .\apps\android\app\build\outputs\apk\debug\app-debug.apk
+adb shell am start -n com.string1225.pocketpilot/.MainActivity
+
+Push-Location apps\android
+.\gradlew.bat connectedDebugAndroidTest
+Pop-Location
+```
+
+## 4. 用 USB 连接手机
+
+1. 手机进入“设置 > 关于手机”，连续点击“版本号”约 7 次以启用开发者选项。
+2. 打开“开发者选项 > USB 调试”。部分厂商还要求开启“USB 调试（安全设置）”。
+3. 使用支持数据传输的 USB 线连接电脑，USB 用途选择“文件传输”。
+4. 手机保持解锁；RSA 指纹弹窗出现后，核对并允许这台电脑。
+5. Windows 未识别时，安装厂商 OEM USB Driver，或使用 Android Studio 的 `Tools > Troubleshoot Device Connections`。
+
+官方参考：[在硬件设备上运行应用](https://developer.android.com/studio/run/device) 与 [ADB](https://developer.android.com/tools/adb)。
+
+验证连接：
 
 ```powershell
 adb kill-server
@@ -87,118 +97,26 @@ adb start-server
 adb devices -l
 ```
 
-正常结果包含一行状态为 `device`：
+目标应显示为 `device`。常见异常：
 
-```text
-SERIAL_NUMBER    device product:... model:... transport_id:...
-```
+- `unauthorized`：解锁手机并确认 RSA；必要时撤销 USB 调试授权后重连。
+- `offline`：重插数据线并重启 ADB server。
+- 无设备：换数据线/USB 口，确认“文件传输”，安装 OEM Driver。
+- 多设备：后续命令添加 `-s <SERIAL>`。
 
-常见异常：
-
-- `unauthorized`：保持手机解锁，重新确认 RSA 弹窗；必要时在开发者选项撤销 USB 调试授权后重连。
-- `offline`：重插数据线，执行 `adb kill-server` / `adb start-server`。
-- 没有设备：换数据线/USB 口、切换为文件传输、安装 OEM Driver。
-- 多台设备：后续命令加 `-s <SERIAL_NUMBER>` 指定目标。
-
-官方真机说明：[Run apps on a hardware device](https://developer.android.com/studio/run/device)。
-
-## 4. 安装、启动与日志
-
-只有一台设备时：
-
-```powershell
-Push-Location apps\android
-.\gradlew.bat installDebug
-Pop-Location
-adb shell am start -n com.string1225.pocketpilot/.MainActivity
-```
-
-也可以直接安装已经构建的 APK：
+安装、启动和日志：
 
 ```powershell
 adb install -r .\apps\android\app\build\outputs\apk\debug\app-debug.apk
-```
+adb shell am start -n com.string1225.pocketpilot/.MainActivity
 
-只看 PocketPilot 进程日志：
-
-```powershell
 $pocketPilotPid = (adb shell pidof com.string1225.pocketpilot).Trim()
 adb logcat --pid=$pocketPilotPid
 ```
 
-保存完整日志到电脑：
+## 5. Android 11+ 无线调试
 
-```powershell
-adb logcat -c
-adb logcat -v threadtime | Tee-Object -FilePath .\pocketpilot-logcat.txt
-```
-
-日志采集完成后按 `Ctrl+C`。日志可能包含项目文件名或测试输入，分享前先检查内容；API Key/SSH 凭据在当前版本尚未接入。
-
-## 5. 首轮 Smoke Test
-
-### Project 与文件
-
-1. 首次启动应自动出现且只出现一个“个人项目”。
-2. 新建 `真机测试` Project，然后进入。
-3. 在 Files 中创建 `notes/hello.md`。
-4. 写入 `Hello PocketPilot` 并保存。
-5. 关闭 App 再打开，确认 Project、文件和内容仍在。
-
-### TypeScript Agent Runtime
-
-Agent 页面当前明确标注“离线演示模式”。它仍然经过真实的 TypeScript Agent Loop、Tool Registry、Native Bridge 和 Workspace Repository，只是不向外部 LLM 发请求。
-
-依次执行：
-
-```text
-/list
-/create src/demo.ts | export const answer = 42;
-/read src/demo.ts
-/replace src/demo.ts | 42 | 43
-/read src/demo.ts
-```
-
-预期：
-
-- 时间线依次出现 user、assistant、tool started、tool finished、run completed。
-- Files 页面真实出现 `src/demo.ts`，内容最终为 `43`。
-- 每次成功写操作都新增 Checkpoint。
-
-再执行：
-
-```text
-/delete src/demo.ts
-```
-
-预期弹出一次性 Native Tool 审批框，并显示 `workspace.delete` 与目标路径：
-
-1. 第一次点“拒绝”，确认 Run 安全失败且文件保持不变。
-2. 再次执行 `/delete src/demo.ts`，点“允许一次”。
-3. 确认文件被删除、Run 完成，并新增一条 Agent Checkpoint。
-
-审批期间状态显示为 `WAITING_FOR_APPROVAL`，输入框保持锁定，仍可用“停止 Run”取消；审批结果只对当前 Tool Call 生效。
-
-### Checkpoint 与恢复
-
-1. 进入 Checkpoints，选择批准删除之前的 Checkpoint，阅读确认框并 Restore。
-2. 回到 Files，确认 `src/demo.ts` 与当时的内容一起恢复。
-3. 再修改并保存一次，确认新增 Checkpoint 能显示修改数量。
-4. 再选择更早的 Checkpoint 并 Restore，确认内容回到目标快照。
-5. Checkpoint 历史始终保留，并且每次 Restore 前都有安全快照，完成后也有新的恢复记录。
-
-### 进程重启
-
-```powershell
-adb shell am force-stop com.string1225.pocketpilot
-adb shell am start -n com.string1225.pocketpilot/.MainActivity
-```
-
-确认 Project、Workspace 和 Checkpoint 都仍存在。若强制停止发生在 Agent Run 中间，重启后数据库会把残留的 `RUNNING` 状态标为失败/中断，不会假装任务已完成。
-
-## 6. Android 11+ 无线调试
-
-电脑和手机连接同一可信局域网。手机打开“开发者选项 > 无线调试”，选择“使用配对码配对设备”，分别记下配对端口和调试端口：
+电脑和手机连接同一可信局域网。手机打开“开发者选项 > 无线调试 > 使用配对码配对设备”，分别记下配对端口和调试端口：
 
 ```powershell
 adb pair <手机IP>:<配对端口>
@@ -206,16 +124,96 @@ adb connect <手机IP>:<调试端口>
 adb devices -l
 ```
 
-配对成功后，安装与日志命令和 USB 相同。测试结束建议关闭无线调试。Android 11 及以上的无线调试由 ADB 官方支持，详见 [ADB 文档](https://developer.android.com/tools/adb)。
+测试结束后建议关闭无线调试。
 
-## 7. 如何把手机交给 Codex 继续测试
+## 6. 首轮 UI 与持久化 Smoke Test
 
-完成下面三项即可：
+1. 首次启动应直接看到 Chat，中间页标题下显示当前项目。
+2. 在 Chat 上向右滑，应进入“项目与会话”；新建项目、切换项目，再点 `+` 新建会话。
+3. 返回 Chat 向左滑，应进入“产出物”；创建和编辑 `notes/hello.md`。
+4. 点左上角 PocketPilot 图标，依次验证：模型、远程服务器、个性化、记忆、工具、插件、外观、语言。
+5. 切换“跟随系统/亮色/暗色”和“中文/English”，返回后立即生效；强制停止并重启，设置仍保留。
+6. 在不同项目和会话之间切换，确认消息与文件不会串项目。
 
-1. 手机接在运行 Codex 的这台电脑上，并保持解锁。
-2. `adb devices -l` 显示目标状态为 `device`。
-3. 在当前任务里告诉 Codex：“手机已连接，可以做真机测试”。如果有多台设备，同时提供目标 serial。
+离线模式可发送：
 
-之后 Codex 可以在本机执行只针对该测试设备的以下操作：构建 Debug APK、安装/覆盖安装、启动/停止 PocketPilot、运行 instrumentation test、抓取 PocketPilot logcat、查看应用级崩溃信息。涉及清空 App 数据、卸载、重启手机或改系统设置等破坏性/扩大范围操作，会先明确说明并征得确认。
+```text
+/list
+/create src/demo.ts | export const answer = 42;
+/read src/demo.ts
+/replace src/demo.ts | 42 | 43
+/delete src/demo.ts
+```
 
-早期测试只使用临时 Project、测试仓库和低权限测试服务器。不要在首版 APK 中放生产 API Key、生产 Git Token 或生产 SSH 私钥。
+`/delete` 应弹出一次性审批。先拒绝确认文件保留，再允许一次确认删除成功并产生 Checkpoint。
+
+## 7. 真实 LLM 测试
+
+1. 左上角设置 > 模型。
+2. 默认模型应为 `glm-5.2`。
+3. Chat Completions 默认 Base URL：
+   `https://open.bigmodel.cn/api/coding/paas/v4`
+4. Responses 默认 Base URL：
+   `https://open.bigmodel.cn/api/v1`
+5. 在设备键盘中粘贴测试 API Key 并保存。界面只显示“已配置”，不会回显明文。
+6. 发送“列出当前项目文件”；确认出现真实 assistant 消息和 `workspace.list` Tool 轨迹。
+7. 分别切换两种协议；在同一会话连续追问，验证多轮历史。
+8. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
+
+不要使用生产主 Key。建议创建可撤销、限额的测试 Key。不要截图 Key 输入框，不要把 Key 放进项目文件或 logcat。
+
+注意：智谱的 [Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)同时声明套餐权益仅限页面列出的受支持工具，PocketPilot 当前不在名单中。请先确认账号/套餐允许第三方客户端调用；否则改用你有权访问的 OpenAI-compatible Endpoint，不能仅凭 Base URL 可连接就推断套餐授权成立。
+
+## 8. Git 实接 Smoke Test
+
+使用专门的临时仓库：
+
+1. 公共仓库：让 Agent 在空项目执行 clone，再请求 status/diff。
+2. 私有 HTTPS 仓库：设置 > Git HTTPS 凭据，录入仅对临时仓库有权限的 Token。
+3. 请求 commit，检查审批框中的项目、消息和目标。
+4. 请求 pull/push，核对审批框显示的远端主机、分支和“将发送凭据”提示后再允许。
+5. 制造 non-fast-forward，确认 push 明确失败而不是显示成功。
+6. 测试完立即撤销 Token，并在设置中移除本地凭据。
+
+Checkpoint Restore 不会执行 `git reset --hard`，也不会移动 Git HEAD。
+
+## 9. SSH 实接 Smoke Test
+
+使用无生产权限的临时账号：
+
+1. 从服务器管理员或可信本机命令获取 SSH 主机公钥的 OpenSSH `SHA256:` 指纹；不要从首次连接错误信息中盲目信任指纹。
+2. 设置 > 远程服务器，填写名称、Host、Port、Username、认证方式、指纹和用途。
+3. 录入测试密码或未加密的 PEM/OpenSSH 私钥；数据库只保存 credential id，密文由 Android Keystore 保护。当前版本尚未建模加密私钥的 passphrase。
+4. 请求 Agent 执行只读命令，例如 `pwd`、`uname -a`；审批框核对 server id、主机、指纹、timeout 和完整命令。
+5. 验证 stdout/stderr/exitCode；再测试非零退出、超时和大量输出上限。
+6. 测试结束删除服务器配置并撤销测试凭据。
+
+首轮不要批准 `sudo`、删除、服务管理、Docker 清理或生产发布命令。
+
+## 10. 后台运行与通知
+
+1. 允许 PocketPilot 通知权限。
+2. 启动一个会持续数十秒的测试会话。
+3. 立即按 Home 或切换到其他 App；通知栏应出现“PocketPilot is working”。
+4. 任务需要工具审批时，通知变为“needs your approval”；点击应回到对应项目/会话。
+5. 完成、失败或取消后应收到结果通知；点击结果通知同样回到原会话。
+6. 返回 App，时间线应完整且顺序不乱。
+
+`adb shell am force-stop` 是用户强制停止，不等于普通切出 App；系统会终止任务和通知。普通后台测试不要执行 force-stop。
+
+辅助检查：
+
+```powershell
+adb shell dumpsys activity services com.string1225.pocketpilot
+adb shell dumpsys notification --noredact | Select-String PocketPilot
+```
+
+## 11. 把手机交给 Codex 测试
+
+完成三项即可：
+
+1. 手机连接这台电脑并保持解锁。
+2. `adb devices -l` 中目标状态为 `device`。
+3. 在当前任务告诉 Codex：“手机已连接，可以测试”；多设备时附目标 serial。
+
+随后 Codex 可以构建/覆盖安装 Debug APK、启动/停止 PocketPilot、运行 instrumentation tests、抓取应用进程日志和崩溃信息。清空 App 数据、卸载、重启手机或修改系统设置属于破坏性或扩范围操作，会先说明并征得确认。

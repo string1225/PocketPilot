@@ -4,9 +4,13 @@ import {
   type AgentProvider,
   type AgentRunResult
 } from "@pocketpilot/agent-core";
-import { OfflineCommandProvider } from "@pocketpilot/providers";
-import { ToolRegistry } from "@pocketpilot/tool-runtime";
+import {
+  OfflineCommandProvider,
+  OpenAICompatibleProvider
+} from "@pocketpilot/providers";
+import { AllowAllPermissionPolicy, ToolRegistry } from "@pocketpilot/tool-runtime";
 
+import { NativeRpcLlmTransport } from "./llm-transport.js";
 import { createNativeWorkspaceTools, NativeRpcClient } from "./native-rpc.js";
 import {
   ANDROID_BRIDGE_VERSION,
@@ -49,8 +53,22 @@ export class AndroidAgentRuntime {
 
   public constructor(options: AndroidAgentRuntimeOptions) {
     this.#postMessage = options.postMessage;
-    this.#providerFactory = options.providerFactory ?? (() => new OfflineCommandProvider());
     this.#rpc = new NativeRpcClient({ postMessage: options.postMessage });
+    this.#providerFactory = options.providerFactory ?? ((request) => {
+      const provider = request.provider;
+      if (provider === undefined || provider.type === "offline") {
+        return new OfflineCommandProvider();
+      }
+      return new OpenAICompatibleProvider(
+        {
+          credentialId: provider.credentialId,
+          ...(provider.protocol === undefined ? {} : { protocol: provider.protocol }),
+          ...(provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl }),
+          ...(provider.model === undefined ? {} : { model: provider.model })
+        },
+        new NativeRpcLlmTransport(this.#rpc),
+      );
+    });
   }
 
   public async start(requestJson: string): Promise<string> {
@@ -60,11 +78,20 @@ export class AndroidAgentRuntime {
     }
 
     const controller = new AbortController();
-    const registry = new ToolRegistry().registerAll(createNativeWorkspaceTools(this.#rpc));
+    // Android Native owns the user-visible, per-call approval UI. Allow the
+    // bridge request through here so network/remote calls can reach that gate.
+    const registry = new ToolRegistry({
+      permissionPolicy: new AllowAllPermissionPolicy()
+    }).registerAll(
+      request.toolsEnabled === false ? [] : createNativeWorkspaceTools(this.#rpc),
+    );
     const runner = new DefaultAgentRunner({
       provider: this.#providerFactory(request),
       tools: registry,
       maxSteps: request.maxSteps ?? 8,
+      ...(request.systemPrompt === undefined
+        ? {}
+        : { systemPrompt: request.systemPrompt }),
       onEvent: (event) => {
         this.#postEvent(event);
       }
@@ -75,6 +102,7 @@ export class AndroidAgentRuntime {
         runId: request.runId,
         projectId: request.projectId,
         task: request.task,
+        ...(request.messages === undefined ? {} : { messages: request.messages }),
         signal: controller.signal
       })
       .catch((error: unknown) => {

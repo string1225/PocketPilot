@@ -128,6 +128,12 @@ export class NativeRpcClient {
         resolve
       });
       context.signal.addEventListener("abort", onAbort, { once: true });
+      // Abort may race the initial check (for example while an id is being
+      // allocated). AbortSignal does not replay an event to a late listener.
+      if (context.signal.aborted) {
+        onAbort();
+        return;
+      }
 
       let serialized: string;
       try {
@@ -206,33 +212,225 @@ export class NativeRpcClient {
   }
 }
 
-const inputObjectSchema: JsonSchema = {
+const objectSchema = (
+  properties: Readonly<Record<string, JsonSchema>>,
+  required: readonly string[] = [],
+): JsonSchema => ({
   type: "object",
-  additionalProperties: true
+  properties,
+  required,
+  additionalProperties: false
+});
+
+const workspacePathSchema: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 4_096,
+  description: "A project-relative workspace path. Absolute paths and traversal are forbidden."
 };
+
+const optionalWorkspacePathSchema: JsonSchema = {
+  type: "string",
+  maxLength: 4_096,
+  default: "",
+  description: "An optional project-relative directory; use an empty string for the workspace root."
+};
+
+const workspaceContentSchema: JsonSchema = {
+  type: "string",
+  maxLength: 1_048_576,
+  description: "UTF-8 text content, limited to 1 MiB by the native workspace."
+};
+
+const gitRemoteSchema: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 4_096,
+  description: "A credential-free HTTPS Git remote URL."
+};
+
+const gitBranchSchema: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 256
+};
+
+const gitRemoteNameSchema: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+};
+
+const gitCredentialProperties: Readonly<Record<string, JsonSchema>> = {
+  useCredential: {
+    type: "boolean",
+    default: false,
+    description: "Use the app's dedicated Git token credential."
+  },
+  username: {
+    type: "string",
+    minLength: 1,
+    maxLength: 256,
+    default: "git",
+    description: "HTTPS Git username; used only when useCredential is true."
+  }
+};
+
+const gitTimeoutMillisSchema: JsonSchema = {
+  type: "integer",
+  minimum: 1_000,
+  maximum: 3_600_000,
+  multipleOf: 1_000,
+  default: 60_000,
+  description: "Git network timeout in milliseconds, in whole-second increments."
+};
+
+const sshTimeoutMillisSchema: JsonSchema = {
+  type: "integer",
+  minimum: 1,
+  maximum: 3_600_000,
+  default: 60_000,
+  description: "Operation timeout in milliseconds (1 to 3600000)."
+};
+
+const workspaceSchemas = {
+  list: objectSchema({ path: optionalWorkspacePathSchema }),
+  read: objectSchema({ path: workspacePathSchema }, ["path"]),
+  write: objectSchema(
+    { path: workspacePathSchema, content: workspaceContentSchema },
+    ["path", "content"],
+  ),
+  create: objectSchema(
+    { path: workspacePathSchema, content: workspaceContentSchema },
+    ["path", "content"],
+  ),
+  delete: objectSchema({ path: workspacePathSchema }, ["path"]),
+  move: objectSchema(
+    { from: workspacePathSchema, to: workspacePathSchema },
+    ["from", "to"],
+  ),
+  search: objectSchema(
+    {
+      query: { type: "string", minLength: 1, maxLength: 65_536 },
+      limit: { type: "integer", minimum: 1, maximum: 500, default: 100 }
+    },
+    ["query"],
+  ),
+  patch: objectSchema(
+    {
+      path: workspacePathSchema,
+      oldText: { ...workspaceContentSchema, minLength: 1 },
+      newText: workspaceContentSchema,
+      expectedOccurrences: {
+        type: "integer",
+        enum: [1],
+        default: 1,
+        description: "The native MVP requires exactly one occurrence."
+      }
+    },
+    ["path", "oldText", "newText"],
+  )
+} as const;
+
+const gitSchemas = {
+  init: objectSchema({ initialBranch: { ...gitBranchSchema, default: "main" } }),
+  clone: objectSchema(
+    {
+      remoteUrl: gitRemoteSchema,
+      branch: gitBranchSchema,
+      ...gitCredentialProperties,
+      timeoutMillis: gitTimeoutMillisSchema
+    },
+    ["remoteUrl"],
+  ),
+  status: objectSchema({}),
+  diff: objectSchema({
+    maxBytes: {
+      type: "integer",
+      minimum: 1,
+      maximum: 524_288,
+      default: 524_288,
+      description: "Maximum UTF-8 bytes returned for each of the staged and unstaged patches."
+    }
+  }),
+  commit: objectSchema(
+    {
+      message: { type: "string", minLength: 1, maxLength: 65_536 },
+      authorName: { type: "string", minLength: 1, maxLength: 256 },
+      authorEmail: { type: "string", minLength: 3, maxLength: 320 }
+    },
+    ["message", "authorName", "authorEmail"],
+  ),
+  pull: objectSchema({
+    remote: { ...gitRemoteNameSchema, default: "origin" },
+    branch: gitBranchSchema,
+    ...gitCredentialProperties,
+    timeoutMillis: gitTimeoutMillisSchema
+  }),
+  push: objectSchema({
+    remote: { ...gitRemoteNameSchema, default: "origin" },
+    ...gitCredentialProperties,
+    timeoutMillis: gitTimeoutMillisSchema
+  })
+} as const;
+
+const sshExecuteSchema = objectSchema(
+  {
+    server: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      description: "The id or name of a user-configured SSH server."
+    },
+    command: {
+      type: "string",
+      minLength: 1,
+      maxLength: 4_096,
+      description: "The command text shown in native approval before execution."
+    },
+    timeoutMillis: sshTimeoutMillisSchema,
+    maxOutputBytes: {
+      type: "integer",
+      minimum: 1,
+      maximum: 524_288,
+      default: 524_288
+    }
+  },
+  ["server", "command"],
+);
 
 const nativeTool = (
   rpc: NativeRpcClient,
   name: string,
   description: string,
   risk: ToolRisk,
+  inputSchema: JsonSchema,
 ): AgentTool<unknown, unknown> => ({
   name,
   description,
   risk,
-  inputSchema: inputObjectSchema,
+  inputSchema,
   execute: (input, context) => rpc.execute(name, input, context)
 });
 
 export const createNativeWorkspaceTools = (
   rpc: NativeRpcClient,
 ): readonly AgentTool<unknown, unknown>[] => [
-  nativeTool(rpc, "workspace.list", "List a workspace directory.", "read"),
-  nativeTool(rpc, "workspace.read", "Read a workspace text file.", "read"),
-  nativeTool(rpc, "workspace.write", "Write an existing workspace text file.", "write"),
-  nativeTool(rpc, "workspace.create", "Create a workspace text file.", "write"),
-  nativeTool(rpc, "workspace.delete", "Delete a workspace path.", "write"),
-  nativeTool(rpc, "workspace.move", "Move a workspace path.", "write"),
-  nativeTool(rpc, "workspace.search", "Search workspace text files.", "read"),
-  nativeTool(rpc, "workspace.patch", "Apply an exact-text workspace patch.", "write")
+  nativeTool(rpc, "workspace.list", "List a workspace directory with bounded entries and truncation metadata.", "read", workspaceSchemas.list),
+  nativeTool(rpc, "workspace.read", "Read a workspace text file.", "read", workspaceSchemas.read),
+  nativeTool(rpc, "workspace.write", "Write an existing workspace text file.", "write", workspaceSchemas.write),
+  nativeTool(rpc, "workspace.create", "Create a workspace text file.", "write", workspaceSchemas.create),
+  nativeTool(rpc, "workspace.delete", "Delete one workspace file after native approval.", "write", workspaceSchemas.delete),
+  nativeTool(rpc, "workspace.move", "Move a workspace path.", "write", workspaceSchemas.move),
+  nativeTool(rpc, "workspace.search", "Search workspace text files.", "read", workspaceSchemas.search),
+  nativeTool(rpc, "workspace.patch", "Apply one exact-text workspace replacement.", "write", workspaceSchemas.patch),
+  nativeTool(rpc, "git.init", "Initialize Git after native approval.", "write", gitSchemas.init),
+  nativeTool(rpc, "git.clone", "Clone an HTTPS Git repository after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.clone),
+  nativeTool(rpc, "git.status", "Read bounded Git status entries and truncation metadata for the current project workspace.", "read", gitSchemas.status),
+  nativeTool(rpc, "git.diff", "Read separately bounded staged and unstaged Git patches.", "read", gitSchemas.diff),
+  nativeTool(rpc, "git.commit", "Stage changes and create a Git commit after native approval.", "write", gitSchemas.commit),
+  nativeTool(rpc, "git.pull", "Pull from an HTTPS Git remote after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.pull),
+  nativeTool(rpc, "git.push", "Push to an HTTPS Git remote after native approval and return bounded update metadata; timeoutMillis is in milliseconds.", "network", gitSchemas.push),
+  nativeTool(rpc, "ssh.execute", "Execute one command after native approval; timeoutMillis is in milliseconds.", "remote", sshExecuteSchema)
 ];

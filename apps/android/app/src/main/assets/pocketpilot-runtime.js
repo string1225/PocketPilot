@@ -50,6 +50,11 @@
     }
   };
   _RiskPermissionPolicy_decisions = /* @__PURE__ */ new WeakMap();
+  var AllowAllPermissionPolicy = class {
+    evaluate() {
+      return { outcome: "allow" };
+    }
+  };
 
   // ../tool-runtime/dist/types.js
   var toolFailure = (code, message, options = {}) => ({
@@ -416,7 +421,7 @@
         });
       }
       case "/delete":
-        return body.length === 0 ? { content: "A file path is required.\n".concat(help) } : toolCall(request, "workspace.delete", { path: body, recursive: false });
+        return body.length === 0 ? { content: "A file path is required.\n".concat(help) } : toolCall(request, "workspace.delete", { path: body });
       default:
         return { content: help };
     }
@@ -451,17 +456,261 @@
   };
 
   // ../providers/dist/openai-compatible.js
+  var __classPrivateFieldSet4 = function(receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+  };
+  var __classPrivateFieldGet4 = function(receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+  };
   var _OpenAICompatibleProvider_config;
   var _OpenAICompatibleProvider_transport;
+  var DEFAULT_LLM_MODEL = "glm-5.2";
+  var DEFAULT_CHAT_COMPLETIONS_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+  var DEFAULT_RESPONSES_BASE_URL = "https://open.bigmodel.cn/api/v1";
+  var DEFAULT_CHAT_COMPLETIONS_CONFIG = Object.freeze({
+    protocol: "chat_completions",
+    baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+    model: DEFAULT_LLM_MODEL,
+    credentialId: ""
+  });
+  var DEFAULT_RESPONSES_CONFIG = Object.freeze({
+    protocol: "responses",
+    baseUrl: DEFAULT_RESPONSES_BASE_URL,
+    model: DEFAULT_LLM_MODEL,
+    credentialId: ""
+  });
+  var normalizedEndpoint = (rawBaseUrl) => {
+    if (rawBaseUrl.length > 2048) {
+      throw new Error("LLM endpoint is too long.");
+    }
+    const baseUrl = new URL(rawBaseUrl);
+    if (baseUrl.protocol !== "https:") {
+      throw new Error("LLM endpoint must use HTTPS.");
+    }
+    if (baseUrl.port === "0") {
+      throw new Error("LLM endpoint port is invalid.");
+    }
+    if (baseUrl.username.length > 0 || baseUrl.password.length > 0 || baseUrl.search.length > 0 || baseUrl.hash.length > 0) {
+      throw new Error("LLM endpoint must not embed credentials, query parameters, or fragments.");
+    }
+    return baseUrl.toString().replace(/\/$/u, "");
+  };
+  var resolveOpenAICompatibleConfig = (config) => {
+    var _a, _b, _c;
+    const protocol = (_a = config.protocol) != null ? _a : "chat_completions";
+    const defaultBaseUrl = protocol === "responses" ? DEFAULT_RESPONSES_BASE_URL : DEFAULT_CHAT_COMPLETIONS_BASE_URL;
+    const rawBaseUrl = ((_b = config.baseUrl) == null ? void 0 : _b.trim()) || defaultBaseUrl;
+    const model = ((_c = config.model) == null ? void 0 : _c.trim()) || DEFAULT_LLM_MODEL;
+    const credentialId = config.credentialId.trim();
+    if (model.length > 128) {
+      throw new Error("LLM model identifier is too long.");
+    }
+    if (credentialId.length === 0 || credentialId.length > 256) {
+      throw new Error("credentialId must contain between 1 and 256 characters.");
+    }
+    return {
+      protocol,
+      baseUrl: normalizedEndpoint(rawBaseUrl),
+      model,
+      credentialId
+    };
+  };
+  var OpenAICompatibleProvider = class {
+    constructor(config, transport) {
+      _OpenAICompatibleProvider_config.set(this, void 0);
+      _OpenAICompatibleProvider_transport.set(this, void 0);
+      __classPrivateFieldSet4(this, _OpenAICompatibleProvider_config, resolveOpenAICompatibleConfig(config), "f");
+      __classPrivateFieldSet4(this, _OpenAICompatibleProvider_transport, transport, "f");
+      this.name = "openai-compatible:".concat(__classPrivateFieldGet4(this, _OpenAICompatibleProvider_config, "f").protocol, ":").concat(__classPrivateFieldGet4(this, _OpenAICompatibleProvider_config, "f").model);
+    }
+    complete(request) {
+      return __classPrivateFieldGet4(this, _OpenAICompatibleProvider_transport, "f").complete(__classPrivateFieldGet4(this, _OpenAICompatibleProvider_config, "f"), request);
+    }
+  };
   _OpenAICompatibleProvider_config = /* @__PURE__ */ new WeakMap(), _OpenAICompatibleProvider_transport = /* @__PURE__ */ new WeakMap();
 
   // ../providers/dist/scripted.js
   var _ScriptedProvider_steps;
   _ScriptedProvider_steps = /* @__PURE__ */ new WeakMap();
 
+  // src/llm-transport.ts
+  var NativeLlmTransportError = class extends Error {
+    constructor(code, message, retryable = false) {
+      super(message);
+      this.name = "NativeLlmTransportError";
+      this.code = code;
+      this.retryable = retryable;
+    }
+  };
+  var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+  var serializeMessage = (message) => {
+    switch (message.role) {
+      case "assistant":
+        return {
+          role: message.role,
+          content: message.content,
+          ...message.toolCalls === void 0 ? {} : { toolCalls: message.toolCalls.map((call) => ({ ...call })) }
+        };
+      case "tool":
+        return {
+          role: message.role,
+          content: message.content,
+          toolCallId: message.toolCallId,
+          name: message.name
+        };
+      case "system":
+      case "user":
+        return { role: message.role, content: message.content };
+    }
+  };
+  var parseToolCall = (value) => {
+    const record = asRecord(value);
+    if (record === void 0 || typeof record.id !== "string" || record.id.length === 0 || typeof record.name !== "string" || record.name.length === 0 || !("arguments" in record)) {
+      throw new NativeLlmTransportError(
+        "LLM_INVALID_RESPONSE",
+        "Native LLM response contains an invalid tool call."
+      );
+    }
+    return { id: record.id, name: record.name, arguments: record.arguments };
+  };
+  var parseProviderResponse = (value) => {
+    const record = asRecord(value);
+    if (record === void 0) {
+      throw new NativeLlmTransportError(
+        "LLM_INVALID_RESPONSE",
+        "Native LLM response must be an object."
+      );
+    }
+    const content = record.content;
+    if (content !== void 0 && typeof content !== "string") {
+      throw new NativeLlmTransportError(
+        "LLM_INVALID_RESPONSE",
+        "Native LLM response content must be a string."
+      );
+    }
+    const rawToolCalls = record.toolCalls;
+    if (rawToolCalls !== void 0 && !Array.isArray(rawToolCalls)) {
+      throw new NativeLlmTransportError(
+        "LLM_INVALID_RESPONSE",
+        "Native LLM response toolCalls must be an array."
+      );
+    }
+    const toolCalls = rawToolCalls == null ? void 0 : rawToolCalls.map(parseToolCall);
+    if (content === void 0 && toolCalls === void 0) {
+      throw new NativeLlmTransportError(
+        "LLM_INVALID_RESPONSE",
+        "Native LLM response contains neither content nor tool calls."
+      );
+    }
+    return {
+      ...content === void 0 ? {} : { content },
+      ...toolCalls === void 0 ? {} : { toolCalls }
+    };
+  };
+  var _rpc;
+  var NativeRpcLlmTransport = class {
+    constructor(rpc) {
+      __privateAdd(this, _rpc);
+      __privateSet(this, _rpc, rpc);
+    }
+    async complete(config, request) {
+      var _a;
+      const payload = {
+        protocol: config.protocol,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        credentialId: config.credentialId,
+        messages: request.messages.map(serializeMessage),
+        tools: request.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        }))
+      };
+      const result = await __privateGet(this, _rpc).execute("llm.complete", payload, {
+        runId: request.runId,
+        projectId: request.projectId,
+        callId: "llm:".concat(request.runId, ":").concat(request.step),
+        signal: request.signal
+      });
+      if (!result.success) {
+        throw new NativeLlmTransportError(
+          result.error.code,
+          result.error.message,
+          (_a = result.error.retryable) != null ? _a : false
+        );
+      }
+      return parseProviderResponse(result.data);
+    }
+  };
+  _rpc = new WeakMap();
+
   // src/protocol.ts
   var ANDROID_BRIDGE_VERSION = 1;
-  var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+  var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+  var parseProviderConfig = (value) => {
+    if (value === void 0) return void 0;
+    const record = asRecord2(value);
+    if (record === void 0 || typeof record.type !== "string") {
+      throw new Error("provider must be an object with a supported type.");
+    }
+    const forbiddenSecretField = Object.keys(record).find((key) => {
+      const normalized = key.replace(/[_ -]/gu, "").toLowerCase();
+      return normalized === "apikey" || normalized === "authorization" || normalized === "bearertoken";
+    });
+    if (forbiddenSecretField !== void 0) {
+      throw new Error("API key material must not be sent to the TypeScript runtime.");
+    }
+    if (record.type === "offline") return { type: "offline" };
+    if (record.type !== "openai_compatible") {
+      throw new Error("Unsupported provider type: ".concat(record.type));
+    }
+    const allowedKeys = /* @__PURE__ */ new Set(["type", "protocol", "baseUrl", "model", "credentialId"]);
+    if (Object.keys(record).some((key) => !allowedKeys.has(key))) {
+      throw new Error("provider contains an unsupported field.");
+    }
+    const protocol = record.protocol;
+    if (protocol !== void 0 && protocol !== "chat_completions" && protocol !== "responses") {
+      throw new Error("provider.protocol must be chat_completions or responses.");
+    }
+    const credentialId = record.credentialId;
+    if (typeof credentialId !== "string" || credentialId.trim().length === 0) {
+      throw new Error("provider.credentialId must be a non-empty string.");
+    }
+    const baseUrl = record.baseUrl;
+    const model = record.model;
+    if (baseUrl !== void 0 && typeof baseUrl !== "string") {
+      throw new Error("provider.baseUrl must be a string.");
+    }
+    if (model !== void 0 && typeof model !== "string") {
+      throw new Error("provider.model must be a string.");
+    }
+    return {
+      type: "openai_compatible",
+      credentialId,
+      ...protocol === void 0 ? {} : { protocol },
+      ...baseUrl === void 0 ? {} : { baseUrl },
+      ...model === void 0 ? {} : { model }
+    };
+  };
+  var parseHistory = (value) => {
+    if (value === void 0) return void 0;
+    if (!Array.isArray(value) || value.length > 100) {
+      throw new Error("messages must be an array with at most 100 items.");
+    }
+    return value.map((item) => {
+      const record = asRecord2(item);
+      if (record === void 0 || record.role !== "user" && record.role !== "assistant" || typeof record.content !== "string" || record.content.length > 4 * 1048576) {
+        throw new Error("Historical messages must contain a user/assistant role and text content.");
+      }
+      return { role: record.role, content: record.content };
+    });
+  };
   var parseRuntimeStartRequest = (json) => {
     let parsed;
     try {
@@ -469,22 +718,43 @@
     } catch (e) {
       throw new Error("Runtime start request is not valid JSON.");
     }
-    const record = asRecord(parsed);
+    const record = asRecord2(parsed);
     if (record === void 0) {
       throw new Error("Runtime start request must be an object.");
     }
-    const { runId, projectId, task, maxSteps } = record;
+    const {
+      runId,
+      projectId,
+      task,
+      maxSteps,
+      provider,
+      systemPrompt,
+      messages,
+      toolsEnabled
+    } = record;
     if (typeof runId !== "string" || runId.trim().length === 0 || typeof projectId !== "string" || projectId.trim().length === 0 || typeof task !== "string" || task.trim().length === 0) {
       throw new Error("runId, projectId, and task must be non-empty strings.");
     }
     if (maxSteps !== void 0 && (typeof maxSteps !== "number" || !Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 64)) {
       throw new Error("maxSteps must be an integer between 1 and 64.");
     }
+    const parsedProvider = parseProviderConfig(provider);
+    if (systemPrompt !== void 0 && (typeof systemPrompt !== "string" || systemPrompt.length > 16384)) {
+      throw new Error("systemPrompt must be a string no longer than 16384 characters.");
+    }
+    if (toolsEnabled !== void 0 && typeof toolsEnabled !== "boolean") {
+      throw new Error("toolsEnabled must be a boolean.");
+    }
+    const parsedMessages = parseHistory(messages);
     return {
       runId,
       projectId,
       task,
-      ...maxSteps === void 0 ? {} : { maxSteps }
+      ...maxSteps === void 0 ? {} : { maxSteps },
+      ...parsedProvider === void 0 ? {} : { provider: parsedProvider },
+      ...systemPrompt === void 0 ? {} : { systemPrompt },
+      ...parsedMessages === void 0 ? {} : { messages: parsedMessages },
+      ...toolsEnabled === void 0 ? {} : { toolsEnabled }
     };
   };
   var parseNativeEnvelope = (json) => {
@@ -494,7 +764,7 @@
     } catch (e) {
       throw new Error("Native bridge envelope is not valid JSON.");
     }
-    const record = asRecord(parsed);
+    const record = asRecord2(parsed);
     if (record === void 0 || record.version !== ANDROID_BRIDGE_VERSION || typeof record.id !== "string" || typeof record.runId !== "string" || typeof record.projectId !== "string" || record.type !== "tool.result" && record.type !== "tool.error" || !("payload" in record)) {
       throw new Error("Native bridge envelope has an invalid shape.");
     }
@@ -585,6 +855,10 @@
           resolve
         });
         context.signal.addEventListener("abort", onAbort, { once: true });
+        if (context.signal.aborted) {
+          onAbort();
+          return;
+        }
         let serialized;
         try {
           serialized = JSON.stringify(envelope);
@@ -651,26 +925,202 @@
     pending.signal.removeEventListener("abort", pending.onAbort);
     pending.resolve(result);
   };
-  var inputObjectSchema = {
+  var objectSchema = (properties, required = []) => ({
     type: "object",
-    additionalProperties: true
+    properties,
+    required,
+    additionalProperties: false
+  });
+  var workspacePathSchema = {
+    type: "string",
+    minLength: 1,
+    maxLength: 4096,
+    description: "A project-relative workspace path. Absolute paths and traversal are forbidden."
   };
-  var nativeTool = (rpc, name, description, risk) => ({
+  var optionalWorkspacePathSchema = {
+    type: "string",
+    maxLength: 4096,
+    default: "",
+    description: "An optional project-relative directory; use an empty string for the workspace root."
+  };
+  var workspaceContentSchema = {
+    type: "string",
+    maxLength: 1048576,
+    description: "UTF-8 text content, limited to 1 MiB by the native workspace."
+  };
+  var gitRemoteSchema = {
+    type: "string",
+    minLength: 1,
+    maxLength: 4096,
+    description: "A credential-free HTTPS Git remote URL."
+  };
+  var gitBranchSchema = {
+    type: "string",
+    minLength: 1,
+    maxLength: 256
+  };
+  var gitRemoteNameSchema = {
+    type: "string",
+    minLength: 1,
+    maxLength: 128,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  };
+  var gitCredentialProperties = {
+    useCredential: {
+      type: "boolean",
+      default: false,
+      description: "Use the app's dedicated Git token credential."
+    },
+    username: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      default: "git",
+      description: "HTTPS Git username; used only when useCredential is true."
+    }
+  };
+  var gitTimeoutMillisSchema = {
+    type: "integer",
+    minimum: 1e3,
+    maximum: 36e5,
+    multipleOf: 1e3,
+    default: 6e4,
+    description: "Git network timeout in milliseconds, in whole-second increments."
+  };
+  var sshTimeoutMillisSchema = {
+    type: "integer",
+    minimum: 1,
+    maximum: 36e5,
+    default: 6e4,
+    description: "Operation timeout in milliseconds (1 to 3600000)."
+  };
+  var workspaceSchemas = {
+    list: objectSchema({ path: optionalWorkspacePathSchema }),
+    read: objectSchema({ path: workspacePathSchema }, ["path"]),
+    write: objectSchema(
+      { path: workspacePathSchema, content: workspaceContentSchema },
+      ["path", "content"]
+    ),
+    create: objectSchema(
+      { path: workspacePathSchema, content: workspaceContentSchema },
+      ["path", "content"]
+    ),
+    delete: objectSchema({ path: workspacePathSchema }, ["path"]),
+    move: objectSchema(
+      { from: workspacePathSchema, to: workspacePathSchema },
+      ["from", "to"]
+    ),
+    search: objectSchema(
+      {
+        query: { type: "string", minLength: 1, maxLength: 65536 },
+        limit: { type: "integer", minimum: 1, maximum: 500, default: 100 }
+      },
+      ["query"]
+    ),
+    patch: objectSchema(
+      {
+        path: workspacePathSchema,
+        oldText: { ...workspaceContentSchema, minLength: 1 },
+        newText: workspaceContentSchema,
+        expectedOccurrences: {
+          type: "integer",
+          enum: [1],
+          default: 1,
+          description: "The native MVP requires exactly one occurrence."
+        }
+      },
+      ["path", "oldText", "newText"]
+    )
+  };
+  var gitSchemas = {
+    init: objectSchema({ initialBranch: { ...gitBranchSchema, default: "main" } }),
+    clone: objectSchema(
+      {
+        remoteUrl: gitRemoteSchema,
+        branch: gitBranchSchema,
+        ...gitCredentialProperties,
+        timeoutMillis: gitTimeoutMillisSchema
+      },
+      ["remoteUrl"]
+    ),
+    status: objectSchema({}),
+    diff: objectSchema({
+      maxBytes: {
+        type: "integer",
+        minimum: 1,
+        maximum: 524288,
+        default: 524288,
+        description: "Maximum UTF-8 bytes returned for each of the staged and unstaged patches."
+      }
+    }),
+    commit: objectSchema(
+      {
+        message: { type: "string", minLength: 1, maxLength: 65536 },
+        authorName: { type: "string", minLength: 1, maxLength: 256 },
+        authorEmail: { type: "string", minLength: 3, maxLength: 320 }
+      },
+      ["message", "authorName", "authorEmail"]
+    ),
+    pull: objectSchema({
+      remote: { ...gitRemoteNameSchema, default: "origin" },
+      branch: gitBranchSchema,
+      ...gitCredentialProperties,
+      timeoutMillis: gitTimeoutMillisSchema
+    }),
+    push: objectSchema({
+      remote: { ...gitRemoteNameSchema, default: "origin" },
+      ...gitCredentialProperties,
+      timeoutMillis: gitTimeoutMillisSchema
+    })
+  };
+  var sshExecuteSchema = objectSchema(
+    {
+      server: {
+        type: "string",
+        minLength: 1,
+        maxLength: 512,
+        description: "The id or name of a user-configured SSH server."
+      },
+      command: {
+        type: "string",
+        minLength: 1,
+        maxLength: 4096,
+        description: "The command text shown in native approval before execution."
+      },
+      timeoutMillis: sshTimeoutMillisSchema,
+      maxOutputBytes: {
+        type: "integer",
+        minimum: 1,
+        maximum: 524288,
+        default: 524288
+      }
+    },
+    ["server", "command"]
+  );
+  var nativeTool = (rpc, name, description, risk, inputSchema) => ({
     name,
     description,
     risk,
-    inputSchema: inputObjectSchema,
+    inputSchema,
     execute: (input, context) => rpc.execute(name, input, context)
   });
   var createNativeWorkspaceTools = (rpc) => [
-    nativeTool(rpc, "workspace.list", "List a workspace directory.", "read"),
-    nativeTool(rpc, "workspace.read", "Read a workspace text file.", "read"),
-    nativeTool(rpc, "workspace.write", "Write an existing workspace text file.", "write"),
-    nativeTool(rpc, "workspace.create", "Create a workspace text file.", "write"),
-    nativeTool(rpc, "workspace.delete", "Delete a workspace path.", "write"),
-    nativeTool(rpc, "workspace.move", "Move a workspace path.", "write"),
-    nativeTool(rpc, "workspace.search", "Search workspace text files.", "read"),
-    nativeTool(rpc, "workspace.patch", "Apply an exact-text workspace patch.", "write")
+    nativeTool(rpc, "workspace.list", "List a workspace directory with bounded entries and truncation metadata.", "read", workspaceSchemas.list),
+    nativeTool(rpc, "workspace.read", "Read a workspace text file.", "read", workspaceSchemas.read),
+    nativeTool(rpc, "workspace.write", "Write an existing workspace text file.", "write", workspaceSchemas.write),
+    nativeTool(rpc, "workspace.create", "Create a workspace text file.", "write", workspaceSchemas.create),
+    nativeTool(rpc, "workspace.delete", "Delete one workspace file after native approval.", "write", workspaceSchemas.delete),
+    nativeTool(rpc, "workspace.move", "Move a workspace path.", "write", workspaceSchemas.move),
+    nativeTool(rpc, "workspace.search", "Search workspace text files.", "read", workspaceSchemas.search),
+    nativeTool(rpc, "workspace.patch", "Apply one exact-text workspace replacement.", "write", workspaceSchemas.patch),
+    nativeTool(rpc, "git.init", "Initialize Git after native approval.", "write", gitSchemas.init),
+    nativeTool(rpc, "git.clone", "Clone an HTTPS Git repository after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.clone),
+    nativeTool(rpc, "git.status", "Read bounded Git status entries and truncation metadata for the current project workspace.", "read", gitSchemas.status),
+    nativeTool(rpc, "git.diff", "Read separately bounded staged and unstaged Git patches.", "read", gitSchemas.diff),
+    nativeTool(rpc, "git.commit", "Stage changes and create a Git commit after native approval.", "write", gitSchemas.commit),
+    nativeTool(rpc, "git.pull", "Pull from an HTTPS Git remote after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.pull),
+    nativeTool(rpc, "git.push", "Push to an HTTPS Git remote after native approval and return bounded update metadata; timeoutMillis is in milliseconds.", "network", gitSchemas.push),
+    nativeTool(rpc, "ssh.execute", "Execute one command after native approval; timeoutMillis is in milliseconds.", "remote", sshExecuteSchema)
   ];
 
   // src/runtime.ts
@@ -686,18 +1136,32 @@
       message: error instanceof Error ? error.message : String(error)
     }
   });
-  var _postMessage2, _providerFactory, _rpc, _runs, _AndroidAgentRuntime_instances, postEvent_fn;
+  var _postMessage2, _providerFactory, _rpc2, _runs, _AndroidAgentRuntime_instances, postEvent_fn;
   var AndroidAgentRuntime = class {
     constructor(options) {
       __privateAdd(this, _AndroidAgentRuntime_instances);
       __privateAdd(this, _postMessage2);
       __privateAdd(this, _providerFactory);
-      __privateAdd(this, _rpc);
+      __privateAdd(this, _rpc2);
       __privateAdd(this, _runs, /* @__PURE__ */ new Map());
       var _a;
       __privateSet(this, _postMessage2, options.postMessage);
-      __privateSet(this, _providerFactory, (_a = options.providerFactory) != null ? _a : (() => new OfflineCommandProvider()));
-      __privateSet(this, _rpc, new NativeRpcClient({ postMessage: options.postMessage }));
+      __privateSet(this, _rpc2, new NativeRpcClient({ postMessage: options.postMessage }));
+      __privateSet(this, _providerFactory, (_a = options.providerFactory) != null ? _a : ((request) => {
+        const provider = request.provider;
+        if (provider === void 0 || provider.type === "offline") {
+          return new OfflineCommandProvider();
+        }
+        return new OpenAICompatibleProvider(
+          {
+            credentialId: provider.credentialId,
+            ...provider.protocol === void 0 ? {} : { protocol: provider.protocol },
+            ...provider.baseUrl === void 0 ? {} : { baseUrl: provider.baseUrl },
+            ...provider.model === void 0 ? {} : { model: provider.model }
+          },
+          new NativeRpcLlmTransport(__privateGet(this, _rpc2))
+        );
+      }));
     }
     async start(requestJson) {
       var _a;
@@ -706,11 +1170,16 @@
         throw new Error("Run is already active: ".concat(request.runId));
       }
       const controller = new AbortController();
-      const registry = new ToolRegistry().registerAll(createNativeWorkspaceTools(__privateGet(this, _rpc)));
+      const registry = new ToolRegistry({
+        permissionPolicy: new AllowAllPermissionPolicy()
+      }).registerAll(
+        request.toolsEnabled === false ? [] : createNativeWorkspaceTools(__privateGet(this, _rpc2))
+      );
       const runner = new DefaultAgentRunner({
         provider: __privateGet(this, _providerFactory).call(this, request),
         tools: registry,
         maxSteps: (_a = request.maxSteps) != null ? _a : 8,
+        ...request.systemPrompt === void 0 ? {} : { systemPrompt: request.systemPrompt },
         onEvent: (event) => {
           __privateMethod(this, _AndroidAgentRuntime_instances, postEvent_fn).call(this, event);
         }
@@ -719,6 +1188,7 @@
         runId: request.runId,
         projectId: request.projectId,
         task: request.task,
+        ...request.messages === void 0 ? {} : { messages: request.messages },
         signal: controller.signal
       }).catch((error) => {
         const result = fallbackFailure(request, error);
@@ -746,7 +1216,7 @@
       }
     }
     receive(envelopeJson) {
-      __privateGet(this, _rpc).receive(envelopeJson);
+      __privateGet(this, _rpc2).receive(envelopeJson);
     }
     cancel(runId) {
       const active = __privateGet(this, _runs).get(runId);
@@ -760,12 +1230,12 @@
       return __privateGet(this, _runs).size;
     }
     get pendingToolCount() {
-      return __privateGet(this, _rpc).pendingCount;
+      return __privateGet(this, _rpc2).pendingCount;
     }
   };
   _postMessage2 = new WeakMap();
   _providerFactory = new WeakMap();
-  _rpc = new WeakMap();
+  _rpc2 = new WeakMap();
   _runs = new WeakMap();
   _AndroidAgentRuntime_instances = new WeakSet();
   postEvent_fn = function(event) {

@@ -82,7 +82,7 @@ const commandResponse = (
     case "/delete":
       return body.length === 0
         ? { content: `A file path is required.\n${help}` }
-        : toolCall(request, "workspace.delete", { path: body, recursive: false });
+        : toolCall(request, "workspace.delete", { path: body });
     default:
       return { content: help };
   }

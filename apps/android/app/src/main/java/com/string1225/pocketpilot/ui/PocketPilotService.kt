@@ -2,15 +2,25 @@ package com.string1225.pocketpilot.ui
 
 import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
+import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.ProjectRepository
+import com.string1225.pocketpilot.data.SettingsRepository
+import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
 import com.string1225.pocketpilot.model.AgentRunStatus
 import com.string1225.pocketpilot.model.Checkpoint
+import com.string1225.pocketpilot.model.Conversation
+import com.string1225.pocketpilot.model.ConversationMessage
+import com.string1225.pocketpilot.model.ConversationMessageRole
+import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
+import com.string1225.pocketpilot.security.CredentialIds
+import com.string1225.pocketpilot.security.SecureCredentialStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +43,34 @@ interface PocketPilotService {
     suspend fun createProject(name: String): Project
     suspend fun deleteProject(projectId: String)
 
+    fun listConversations(projectId: String? = null): List<Conversation>
+    fun createConversation(projectId: String, title: String): Conversation
+    fun renameConversation(conversationId: String, title: String)
+    fun deleteConversation(conversationId: String)
+    fun listMessages(conversationId: String): List<ConversationMessage>
+    fun appendMessage(
+        conversationId: String,
+        role: ConversationMessageRole,
+        title: String,
+        content: String,
+        runId: String? = null,
+        isError: Boolean = false,
+        createdAt: Long = System.currentTimeMillis(),
+        messageId: String? = null,
+    ): ConversationMessage
+
+    fun loadSettings(): PocketPilotSettings
+    fun saveSettings(settings: PocketPilotSettings)
+    fun hasLlmCredential(): Boolean
+    fun saveLlmCredential(secret: CharArray)
+    fun removeLlmCredential()
+    fun hasGitCredential(): Boolean
+    fun saveGitCredential(secret: CharArray)
+    fun removeGitCredential()
+    fun listRemoteServers(): List<RemoteServerProfile>
+    fun saveRemoteServer(profile: RemoteServerProfile, secret: CharArray?): RemoteServerProfile
+    fun deleteRemoteServer(serverId: String)
+
     suspend fun listFiles(projectId: String): List<WorkspaceEntry>
     suspend fun readFile(projectId: String, path: String): String
     suspend fun createFile(projectId: String, path: String)
@@ -44,6 +82,7 @@ interface PocketPilotService {
 
     suspend fun runAgent(
         projectId: String,
+        conversationId: String,
         runId: String,
         task: String,
         emit: (TimelineItem) -> Unit,
@@ -62,6 +101,10 @@ class OfflinePocketPilotService(
     private val workspace: WorkspaceRepository,
     private val checkpoints: CheckpointRepository,
     private val agentRuns: AgentRunRepository,
+    private val conversations: ConversationRepository,
+    private val settings: SettingsRepository,
+    private val credentials: SecureCredentialStore,
+    private val sshServers: SshServerRepository,
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean = true
     override val runtimeAvailable: Boolean = false
@@ -71,7 +114,6 @@ class OfflinePocketPilotService(
     private val activeRuns = ConcurrentHashMap.newKeySet<String>()
 
     override suspend fun initialize(): List<Project> {
-        agentRuns.markInterruptedRuns()
         val existing = projects.list()
         if (existing.isNotEmpty()) return existing
         projects.create("个人项目")
@@ -86,6 +128,73 @@ class OfflinePocketPilotService(
         projects.delete(projectId)
         if (projects.list().isEmpty()) projects.create("个人项目")
     }
+
+    override fun listConversations(projectId: String?): List<Conversation> = conversations.list(projectId)
+
+    override fun createConversation(projectId: String, title: String): Conversation =
+        conversations.create(projectId, title)
+
+    override fun renameConversation(conversationId: String, title: String) {
+        conversations.rename(conversationId, title)
+    }
+
+    override fun deleteConversation(conversationId: String) {
+        conversations.delete(conversationId)
+    }
+
+    override fun listMessages(conversationId: String): List<ConversationMessage> =
+        conversations.listMessages(conversationId)
+
+    override fun appendMessage(
+        conversationId: String,
+        role: ConversationMessageRole,
+        title: String,
+        content: String,
+        runId: String?,
+        isError: Boolean,
+        createdAt: Long,
+        messageId: String?,
+    ): ConversationMessage = conversations.appendMessage(
+        conversationId = conversationId,
+        role = role,
+        title = title,
+        content = content,
+        runId = runId,
+        isError = isError,
+        createdAt = createdAt,
+        messageId = messageId,
+    )
+
+    override fun loadSettings(): PocketPilotSettings = settings.load()
+
+    override fun saveSettings(settings: PocketPilotSettings) {
+        this.settings.save(settings)
+    }
+
+    override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
+
+    override fun saveLlmCredential(secret: CharArray) {
+        credentials.put(CredentialIds.DEFAULT_LLM, secret)
+    }
+
+    override fun removeLlmCredential() = credentials.remove(CredentialIds.DEFAULT_LLM)
+
+    override fun hasGitCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)
+
+    override fun saveGitCredential(secret: CharArray) {
+        credentials.put(CredentialIds.DEFAULT_GIT_TOKEN, secret)
+    }
+
+    override fun removeGitCredential() = credentials.remove(CredentialIds.DEFAULT_GIT_TOKEN)
+
+    override fun listRemoteServers(): List<RemoteServerProfile> = sshServers.list()
+
+    override fun saveRemoteServer(
+        profile: RemoteServerProfile,
+        secret: CharArray?,
+    ): RemoteServerProfile = sshServers.save(profile, secret)
+
+    override fun deleteRemoteServer(serverId: String) = sshServers.delete(serverId)
 
     override suspend fun listFiles(projectId: String): List<WorkspaceEntry> = workspace.list(projectId)
 
@@ -111,6 +220,7 @@ class OfflinePocketPilotService(
 
     override suspend fun runAgent(
         projectId: String,
+        conversationId: String,
         runId: String,
         task: String,
         emit: (TimelineItem) -> Unit,

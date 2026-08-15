@@ -2,15 +2,25 @@ package com.string1225.pocketpilot.ui
 
 import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
+import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.ProjectRepository
+import com.string1225.pocketpilot.data.SettingsRepository
+import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
 import com.string1225.pocketpilot.model.AgentRunStatus
 import com.string1225.pocketpilot.model.Checkpoint
+import com.string1225.pocketpilot.model.Conversation
+import com.string1225.pocketpilot.model.ConversationMessage
+import com.string1225.pocketpilot.model.ConversationMessageRole
+import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
+import com.string1225.pocketpilot.security.CredentialIds
+import com.string1225.pocketpilot.security.SecureCredentialStore
 import com.string1225.pocketpilot.runtime.PocketPilotRuntimeBridge
 import com.string1225.pocketpilot.runtime.AgentRuntimeEvent
 import com.string1225.pocketpilot.runtime.ActiveRunRegistry
@@ -24,6 +34,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -40,13 +51,17 @@ class RuntimePocketPilotService(
     private val events: RuntimeEventRouter,
     private val activeRuns: ActiveRunRegistry,
     private val approvals: ToolApprovalCoordinator,
+    private val conversations: ConversationRepository,
+    private val settings: SettingsRepository,
+    private val credentials: SecureCredentialStore,
+    private val sshServers: SshServerRepository,
 ) : PocketPilotService {
-    override val isOfflineDemo: Boolean = true
+    override val isOfflineDemo: Boolean
+        get() = !hasLlmCredential()
     override val runtimeAvailable: Boolean = true
     override val pendingApprovals: StateFlow<List<ToolApprovalRequest>> = approvals.requests
 
     override suspend fun initialize(): List<Project> {
-        agentRuns.markInterruptedRuns()
         projects.ensureDefaultProject()
         return projects.list()
     }
@@ -59,6 +74,73 @@ class RuntimePocketPilotService(
         projects.delete(projectId)
         projects.ensureDefaultProject()
     }
+
+    override fun listConversations(projectId: String?): List<Conversation> = conversations.list(projectId)
+
+    override fun createConversation(projectId: String, title: String): Conversation =
+        conversations.create(projectId, title)
+
+    override fun renameConversation(conversationId: String, title: String) {
+        conversations.rename(conversationId, title)
+    }
+
+    override fun deleteConversation(conversationId: String) {
+        conversations.delete(conversationId)
+    }
+
+    override fun listMessages(conversationId: String): List<ConversationMessage> =
+        conversations.listMessages(conversationId)
+
+    override fun appendMessage(
+        conversationId: String,
+        role: ConversationMessageRole,
+        title: String,
+        content: String,
+        runId: String?,
+        isError: Boolean,
+        createdAt: Long,
+        messageId: String?,
+    ): ConversationMessage = conversations.appendMessage(
+        conversationId = conversationId,
+        role = role,
+        title = title,
+        content = content,
+        runId = runId,
+        isError = isError,
+        createdAt = createdAt,
+        messageId = messageId,
+    )
+
+    override fun loadSettings(): PocketPilotSettings = settings.load()
+
+    override fun saveSettings(settings: PocketPilotSettings) {
+        this.settings.save(settings)
+    }
+
+    override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
+
+    override fun saveLlmCredential(secret: CharArray) {
+        credentials.put(CredentialIds.DEFAULT_LLM, secret)
+    }
+
+    override fun removeLlmCredential() = credentials.remove(CredentialIds.DEFAULT_LLM)
+
+    override fun hasGitCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)
+
+    override fun saveGitCredential(secret: CharArray) {
+        credentials.put(CredentialIds.DEFAULT_GIT_TOKEN, secret)
+    }
+
+    override fun removeGitCredential() = credentials.remove(CredentialIds.DEFAULT_GIT_TOKEN)
+
+    override fun listRemoteServers(): List<RemoteServerProfile> = sshServers.list()
+
+    override fun saveRemoteServer(
+        profile: RemoteServerProfile,
+        secret: CharArray?,
+    ): RemoteServerProfile = sshServers.save(profile, secret)
+
+    override fun deleteRemoteServer(serverId: String) = sshServers.delete(serverId)
 
     override suspend fun listFiles(projectId: String): List<WorkspaceEntry> = workspace.list(projectId)
 
@@ -84,6 +166,7 @@ class RuntimePocketPilotService(
 
     override suspend fun runAgent(
         projectId: String,
+        conversationId: String,
         runId: String,
         task: String,
         emit: (TimelineItem) -> Unit,
@@ -107,12 +190,48 @@ class RuntimePocketPilotService(
                 onError = { error -> handleBridgeError(runId, error, emit, completion) },
             )
             events.awaitReady()
+            val runSettings = settings.load()
+            val history = JSONArray().apply {
+                if (runSettings.memoryEnabled) {
+                    selectRecentRuntimeHistory(
+                        messages = conversations.listMessages(conversationId),
+                        excludedRunId = runId,
+                        maxMessages = MAX_HISTORY_MESSAGES,
+                        maxMessageUtf8Bytes = MAX_HISTORY_MESSAGE_UTF8_BYTES,
+                        maxTotalUtf8Bytes = MAX_HISTORY_TOTAL_UTF8_BYTES,
+                    )
+                        .forEach { message ->
+                            put(
+                                JSONObject()
+                                    .put(
+                                        "role",
+                                        if (message.role == ConversationMessageRole.USER) "user" else "assistant",
+                                    )
+                                    .put("content", message.content),
+                            )
+                        }
+                }
+            }
+            val provider = if (hasLlmCredential()) {
+                JSONObject()
+                    .put("type", "openai_compatible")
+                    .put("protocol", runSettings.llmProtocol.value)
+                    .put("baseUrl", runSettings.llmBaseUrl)
+                    .put("model", runSettings.modelName)
+                    .put("credentialId", CredentialIds.DEFAULT_LLM)
+            } else {
+                JSONObject().put("type", "offline")
+            }
             runtime.start(
                 JSONObject()
                     .put("runId", runId)
                     .put("projectId", projectId)
                     .put("task", task)
                     .put("maxSteps", 8)
+                    .put("provider", provider)
+                    .put("systemPrompt", buildSystemPrompt(runSettings.personalization))
+                    .put("messages", history)
+                    .put("toolsEnabled", runSettings.toolsEnabled)
                     .toString(),
             )
             runtimeStarted = true
@@ -123,12 +242,20 @@ class RuntimePocketPilotService(
             } else {
                 "TypeScript Agent Runtime did not become ready in time"
             }
+            if (registered) {
+                activeRuns.revoke(runId, projectId)
+                registered = false
+            }
             runtime.cancel(runId)
             approvals.cancelRun(runId)
             if (runCreated) runCatching { agentRuns.finish(runId, AgentRunStatus.FAILED, message) }
             emit(timeline(TimelineItemKind.ERROR, "Runtime 超时", message, isError = true))
             AgentRunStatus.FAILED
         } catch (cancelled: CancellationException) {
+            if (registered) {
+                activeRuns.revoke(runId, projectId)
+                registered = false
+            }
             runtime.cancel(runId)
             approvals.cancelRun(runId)
             if (runCreated) runCatching { agentRuns.finish(runId, AgentRunStatus.CANCELLED) }
@@ -142,6 +269,7 @@ class RuntimePocketPilotService(
             subscription?.close()
             approvals.cancelRun(runId)
             if (registered) activeRuns.revoke(runId, projectId)
+            if (registered || runtimeStarted) runtime.finishRun(runId)
         }
     }
 
@@ -157,6 +285,26 @@ class RuntimePocketPilotService(
 
     override fun resolveApproval(requestId: String, approved: Boolean): Boolean =
         approvals.resolve(requestId, approved)
+
+    private fun buildSystemPrompt(personalization: String): String = buildString {
+        append(
+            "You are PocketPilot, an Android project agent. Work only inside the active project " +
+                "workspace. Use tools when evidence or changes are required. Never claim a tool " +
+                "succeeded until its result confirms success.",
+        )
+        val configuredServers = sshServers.list()
+        if (configuredServers.isNotEmpty()) {
+            append("\n\nAvailable SSH servers (use ssh.execute with the configured server id):")
+            configuredServers.forEach { server ->
+                append("\n- ").append(server.id).append(": ").append(server.name)
+                if (server.description.isNotBlank()) append(" — ").append(server.description)
+            }
+        }
+        if (personalization.isNotBlank()) {
+            append("\n\nUser personalization instructions:\n")
+            append(personalization.take(MAX_PERSONALIZATION_CHARS))
+        }
+    }
 
     private fun handleEvent(
         runId: String,
@@ -298,6 +446,46 @@ class RuntimePocketPilotService(
     )
 
     companion object {
-        private const val RUN_TIMEOUT_MILLIS = 120_000L
+        private const val RUN_TIMEOUT_MILLIS = 30 * 60 * 1_000L
+        private const val MAX_HISTORY_MESSAGES = 80
+        private const val MAX_HISTORY_MESSAGE_UTF8_BYTES = 128 * 1024
+        private const val MAX_HISTORY_TOTAL_UTF8_BYTES = 512 * 1024
+        private const val MAX_PERSONALIZATION_CHARS = 4_000
     }
+}
+
+/**
+ * Selects the newest usable conversation memory without allowing one old or
+ * oversized message to make every future Runtime start exceed its envelope.
+ */
+internal fun selectRecentRuntimeHistory(
+    messages: List<ConversationMessage>,
+    excludedRunId: String,
+    maxMessages: Int = 80,
+    maxMessageUtf8Bytes: Int = 128 * 1024,
+    maxTotalUtf8Bytes: Int = 512 * 1024,
+): List<ConversationMessage> {
+    require(maxMessages >= 0) { "maxMessages must not be negative" }
+    require(maxMessageUtf8Bytes >= 0) { "maxMessageUtf8Bytes must not be negative" }
+    require(maxTotalUtf8Bytes >= 0) { "maxTotalUtf8Bytes must not be negative" }
+    if (maxMessages == 0 || maxMessageUtf8Bytes == 0 || maxTotalUtf8Bytes == 0) return emptyList()
+
+    val selectedNewestFirst = ArrayList<ConversationMessage>(minOf(maxMessages, messages.size))
+    var totalBytes = 0
+    for (message in messages.asReversed()) {
+        if (selectedNewestFirst.size >= maxMessages) break
+        if (
+            message.runId == excludedRunId ||
+            (message.role != ConversationMessageRole.USER && message.role != ConversationMessageRole.ASSISTANT)
+        ) {
+            continue
+        }
+        val messageBytes = message.content.toByteArray(Charsets.UTF_8).size
+        if (messageBytes > maxMessageUtf8Bytes) continue
+        if (totalBytes + messageBytes > maxTotalUtf8Bytes) break
+        selectedNewestFirst += message
+        totalBytes += messageBytes
+    }
+    selectedNewestFirst.reverse()
+    return selectedNewestFirst
 }

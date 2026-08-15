@@ -4,9 +4,13 @@ import type { AgentMessage, ProviderRequest } from "@pocketpilot/agent-core";
 import { toolSuccess } from "@pocketpilot/tool-runtime";
 
 import {
+  DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+  DEFAULT_LLM_MODEL,
+  DEFAULT_RESPONSES_BASE_URL,
   OfflineCommandProvider,
   OpenAICompatibleProvider,
-  ScriptedProvider
+  ScriptedProvider,
+  resolveOpenAICompatibleConfig
 } from "../src/index.js";
 
 const request = (messages: readonly AgentMessage[], step = 1): ProviderRequest => ({
@@ -41,7 +45,7 @@ describe("OfflineCommandProvider", () => {
     [
       "/delete notes/a.md",
       "workspace.delete",
-      { path: "notes/a.md", recursive: false }
+      { path: "notes/a.md" }
     ]
   ])("maps %s to %s", async (command, name, args) => {
     const response = await new OfflineCommandProvider().complete(
@@ -100,6 +104,7 @@ describe("provider adapters", () => {
     await expect(provider.complete(providerRequest)).resolves.toEqual({ content: "native" });
     expect(complete).toHaveBeenCalledWith(
       {
+        protocol: "chat_completions",
         baseUrl: "https://llm.example.test/v1",
         model: "demo",
         credentialId: "credential-1"
@@ -120,5 +125,61 @@ describe("provider adapters", () => {
           { complete: async () => ({ content: "unused" }) },
         ),
     ).toThrow("must not embed credentials");
+  });
+
+  it("rejects cleartext HTTP endpoints before calling native", () => {
+    expect(
+      () =>
+        new OpenAICompatibleProvider(
+          {
+            baseUrl: "http://llm.example.test/v1",
+            model: "demo",
+            credentialId: "credential-1"
+          },
+          { complete: async () => ({ content: "unused" }) },
+        ),
+    ).toThrow("must use HTTPS");
+  });
+
+  it("rejects an invalid endpoint port before calling native", () => {
+    expect(
+      () =>
+        resolveOpenAICompatibleConfig({
+          baseUrl: "https://llm.example.test:0/v1",
+          credentialId: "credential-1"
+        }),
+    ).toThrow("port is invalid");
+  });
+
+  it("uses GLM defaults without ever adding API key material", () => {
+    const chat = resolveOpenAICompatibleConfig({ credentialId: "local-key-ref" });
+    const responses = resolveOpenAICompatibleConfig({
+      protocol: "responses",
+      credentialId: "local-key-ref"
+    });
+
+    expect(chat).toEqual({
+      protocol: "chat_completions",
+      baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+      model: DEFAULT_LLM_MODEL,
+      credentialId: "local-key-ref"
+    });
+    expect(responses).toEqual({
+      protocol: "responses",
+      baseUrl: DEFAULT_RESPONSES_BASE_URL,
+      model: DEFAULT_LLM_MODEL,
+      credentialId: "local-key-ref"
+    });
+    expect(JSON.stringify({ chat, responses })).not.toContain("apiKey");
+  });
+
+  it("rejects an empty credential reference before calling native", () => {
+    expect(
+      () =>
+        new OpenAICompatibleProvider(
+          { credentialId: "" },
+          { complete: async () => ({ content: "unused" }) },
+        ),
+    ).toThrow("credentialId");
   });
 });

@@ -21,11 +21,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.string1225.pocketpilot.model.AppLanguage
 import java.text.DateFormat
 import java.util.Date
 
 @Composable
 fun OfflineDemoBanner(
+    language: AppLanguage,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     runtimeAvailable: Boolean = true,
@@ -44,16 +46,28 @@ fun OfflineDemoBanner(
             Icon(Icons.Default.CloudOff, contentDescription = null)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    if (runtimeAvailable) "离线演示模式" else "Agent Runtime 不可用",
+                    if (runtimeAvailable) {
+                        ppText(language, "离线演示模式", "Offline mode")
+                    } else {
+                        ppText(language, "Agent Runtime 不可用", "Agent Runtime unavailable")
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
                 if (!compact) {
                     Text(
                         if (runtimeAvailable) {
-                            "项目、文件和检查点会真实保存；Agent 使用本地指令 Provider，不发送网络请求。"
+                            ppText(
+                                language,
+                                "项目、文件和检查点会真实保存；Agent 使用本地指令 Provider，不发送网络请求。",
+                                "Projects, files, and Checkpoints are stored for real; the local provider sends no network requests.",
+                            )
                         } else {
-                            "Project、Files 和 Checkpoints 仍可使用；Agent 当前运行在受限降级模式。"
+                            ppText(
+                                language,
+                                "Project、Files 和 Checkpoints 仍可使用；Agent 当前运行在受限降级模式。",
+                                "Projects, Files, and Checkpoints remain available while the Agent runs in limited fallback mode.",
+                            )
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )

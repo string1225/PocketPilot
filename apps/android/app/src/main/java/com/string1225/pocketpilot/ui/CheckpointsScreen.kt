@@ -30,19 +30,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.string1225.pocketpilot.model.Checkpoint
 import com.string1225.pocketpilot.model.CheckpointSource
+import com.string1225.pocketpilot.model.AppLanguage
 
 @Composable
 fun CheckpointsScreen(
     checkpoints: List<Checkpoint>,
+    language: AppLanguage,
     onRestore: (String) -> Unit,
 ) {
     var restoreTarget by remember { mutableStateOf<Checkpoint?>(null) }
 
     Column(Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-            Text("Checkpoints", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(
-                "高频保存 Workspace，不会改写 Git HEAD",
+                ppText(language, "检查点", "Checkpoints"),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                ppText(
+                    language,
+                    "高频保存 Workspace，不会改写 Git HEAD",
+                    "Frequent Workspace snapshots that never rewrite Git HEAD",
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -51,8 +61,12 @@ fun CheckpointsScreen(
         if (checkpoints.isEmpty()) {
             EmptyState(
                 icon = Icons.Default.History,
-                title = "还没有 Checkpoint",
-                body = "创建或保存文件后，安全历史会出现在这里。",
+                title = ppText(language, "还没有 Checkpoint", "No Checkpoints yet"),
+                body = ppText(
+                    language,
+                    "创建或保存文件后，安全历史会出现在这里。",
+                    "Your safety history appears here after creating or saving a file.",
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -64,7 +78,11 @@ fun CheckpointsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(checkpoints, key = { it.id }) { checkpoint ->
-                    CheckpointCard(checkpoint = checkpoint, onRestore = { restoreTarget = checkpoint })
+                    CheckpointCard(
+                        checkpoint = checkpoint,
+                        language = language,
+                        onRestore = { restoreTarget = checkpoint },
+                    )
                 }
             }
         }
@@ -73,10 +91,14 @@ fun CheckpointsScreen(
     restoreTarget?.let { checkpoint ->
         AlertDialog(
             onDismissRequest = { restoreTarget = null },
-            title = { Text("恢复此 Checkpoint？") },
+            title = { Text(ppText(language, "恢复此 Checkpoint？", "Restore this Checkpoint?")) },
             text = {
                 Text(
-                    "当前 Workspace 会被替换为 ${formatTimestamp(checkpoint.createdAt)} 的状态，并在完成后记录新的 Checkpoint；Git HEAD 不会改变。",
+                    ppText(
+                        language,
+                        "当前 Workspace 会被替换为 ${formatTimestamp(checkpoint.createdAt)} 的状态，并在完成后记录新的 Checkpoint；Git HEAD 不会改变。",
+                        "The current Workspace will be replaced with its state at ${formatTimestamp(checkpoint.createdAt)}. A new Checkpoint will be recorded and Git HEAD will not change.",
+                    ),
                 )
             },
             confirmButton = {
@@ -85,9 +107,11 @@ fun CheckpointsScreen(
                         restoreTarget = null
                         onRestore(checkpoint.id)
                     },
-                ) { Text("恢复") }
+                ) { Text(ppText(language, "恢复", "Restore")) }
             },
-            dismissButton = { TextButton(onClick = { restoreTarget = null }) { Text("取消") } },
+            dismissButton = {
+                TextButton(onClick = { restoreTarget = null }) { Text(ppText(language, "取消", "Cancel")) }
+            },
         )
     }
 }
@@ -95,6 +119,7 @@ fun CheckpointsScreen(
 @Composable
 private fun CheckpointCard(
     checkpoint: Checkpoint,
+    language: AppLanguage,
     onRestore: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -107,9 +132,9 @@ private fun CheckpointCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                AssistChip(onClick = {}, label = { Text(checkpoint.source.label()) })
+                AssistChip(onClick = {}, label = { Text(checkpoint.source.label(language)) })
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(checkpoint.safeDescription(), fontWeight = FontWeight.SemiBold)
+                    Text(checkpoint.safeDescription(language), fontWeight = FontWeight.SemiBold)
                     Text(
                         formatTimestamp(checkpoint.createdAt),
                         style = MaterialTheme.typography.bodySmall,
@@ -122,14 +147,14 @@ private fun CheckpointCard(
                 DiffLabel("~${checkpoint.modifiedFiles}", MaterialTheme.colorScheme.tertiary)
                 DiffLabel("−${checkpoint.deletedFiles}", MaterialTheme.colorScheme.error)
                 Text(
-                    "共 ${checkpoint.totalFiles} 个文件",
+                    ppText(language, "共 ${checkpoint.totalFiles} 个文件", "${checkpoint.totalFiles} files total"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             FilledTonalButton(onClick = onRestore, modifier = Modifier.align(Alignment.End)) {
                 Icon(Icons.Default.Restore, contentDescription = null)
-                Text("恢复", modifier = Modifier.padding(start = 6.dp))
+                Text(ppText(language, "恢复", "Restore"), modifier = Modifier.padding(start = 6.dp))
             }
         }
     }
@@ -140,21 +165,21 @@ private fun DiffLabel(text: String, color: androidx.compose.ui.graphics.Color) {
     Text(text, style = MaterialTheme.typography.labelLarge, color = color, fontWeight = FontWeight.Bold)
 }
 
-private fun CheckpointSource.label(): String = when (this) {
+private fun CheckpointSource.label(language: AppLanguage): String = when (this) {
     CheckpointSource.AGENT -> "Agent"
-    CheckpointSource.USER -> "用户"
+    CheckpointSource.USER -> ppText(language, "用户", "User")
     CheckpointSource.GIT -> "Git"
-    CheckpointSource.IMPORT -> "导入"
+    CheckpointSource.IMPORT -> ppText(language, "导入", "Import")
 }
 
-private fun Checkpoint.safeDescription(): String {
-    if (parentId == null) return "项目初始状态"
+private fun Checkpoint.safeDescription(language: AppLanguage): String {
+    if (parentId == null) return ppText(language, "项目初始状态", "Initial project state")
     val looksCorrupted = description.any { it in "鍒淇鎭椤绉诲姩" }
     if (!looksCorrupted && description.isNotBlank()) return description
     return when (source) {
-        CheckpointSource.AGENT -> "Agent 修改工作区"
-        CheckpointSource.USER -> "用户修改工作区"
-        CheckpointSource.GIT -> "Git 操作后的工作区"
-        CheckpointSource.IMPORT -> "导入文件"
+        CheckpointSource.AGENT -> ppText(language, "Agent 修改工作区", "Agent changed the Workspace")
+        CheckpointSource.USER -> ppText(language, "用户修改工作区", "User changed the Workspace")
+        CheckpointSource.GIT -> ppText(language, "Git 操作后的工作区", "Workspace after Git operation")
+        CheckpointSource.IMPORT -> ppText(language, "导入文件", "Imported files")
     }
 }

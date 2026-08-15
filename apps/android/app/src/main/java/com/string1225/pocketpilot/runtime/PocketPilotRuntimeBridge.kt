@@ -60,9 +60,19 @@ class PocketPilotRuntimeBridge(
     /** Fire-and-forget start; progress and completion return as `event` messages. */
     fun start(requestJson: String) {
         val normalizedRequest = RuntimeEnvelopeCodec.normalizeStartRequest(requestJson)
-        evaluateJavascript(
-            RuntimeJavascriptCalls.start(JSONObject.quote(normalizedRequest)),
-        )
+        val runId = (JSONObject(normalizedRequest).opt("runId") as? String)
+            ?.takeIf(String::isNotBlank)
+            ?: throw IllegalArgumentException("Runtime start request requires a non-blank runId")
+        toolJobs.beginRun(runId)
+        val script = RuntimeJavascriptCalls.start(JSONObject.quote(normalizedRequest))
+        onMainThread {
+            // Cancellation may win after beginRun but before this posted
+            // closure reaches the WebView. Suppress the delayed start instead
+            // of sending cancel-before-start to JavaScript and resurrecting it.
+            if (!closed.get() && !webViewFailed.get() && toolJobs.canStart(runId)) {
+                webView.evaluateJavascript(script, null)
+            }
+        }
     }
 
     /** Asks the TypeScript runtime to cancel its currently active run. */
@@ -70,6 +80,17 @@ class PocketPilotRuntimeBridge(
         require(runId.isNotBlank()) { "Run id must not be blank" }
         toolJobs.cancel(runId, "Agent run was cancelled")
         evaluateJavascript(RuntimeJavascriptCalls.cancel(JSONObject.quote(runId)))
+    }
+
+    /**
+     * Ends one Agent-run lifecycle. A cancellation tombstone deliberately
+     * survives this call so late JavaScript messages cannot resurrect a
+     * cancelled run; a later explicit [start] for the same id starts a new
+     * lifecycle and clears that tombstone.
+     */
+    fun finishRun(runId: String) {
+        require(runId.isNotBlank()) { "Run id must not be blank" }
+        toolJobs.finishRun(runId)
     }
 
     override fun close() {
@@ -154,8 +175,7 @@ class PocketPilotRuntimeBridge(
                 )
             }
         }
-        toolJobs.track(request.runId, job)
-        job.start()
+        if (toolJobs.track(request.runId, job)) job.start()
     }
 
     private fun sendToolError(context: RuntimeRequestContext, code: String, message: String) {
@@ -204,11 +224,48 @@ class PocketPilotRuntimeBridge(
 internal class RuntimeToolJobTracker {
     private val lock = Any()
     private val jobsByRunId = mutableMapOf<String, MutableSet<Job>>()
+    private val activeRunIds = mutableSetOf<String>()
+    private val cancelledRunIds = mutableSetOf<String>()
 
-    fun track(runId: String, job: Job) {
+    /** Starts an explicit run lifecycle and clears only that run's old tombstone. */
+    fun beginRun(runId: String) {
         require(runId.isNotBlank()) { "Run id must not be blank" }
         synchronized(lock) {
-            jobsByRunId.getOrPut(runId) { mutableSetOf() }.add(job)
+            check(activeRunIds.add(runId)) { "Run is already active: $runId" }
+            cancelledRunIds.remove(runId)
+        }
+    }
+
+    /**
+     * Marks a lifecycle complete without clearing a cancellation tombstone.
+     * Run identifiers are generated uniquely by the caller; deliberate reuse
+     * must begin a new lifecycle through [beginRun].
+     */
+    fun finishRun(runId: String) {
+        synchronized(lock) { activeRunIds.remove(runId) }
+    }
+
+    fun canStart(runId: String): Boolean = synchronized(lock) {
+        runId in activeRunIds && runId !in cancelledRunIds
+    }
+
+    /**
+     * Returns false when cancellation won the race. In that case [job] is
+     * cancelled before it can start, so a late Tool request has no side effect.
+     */
+    fun track(runId: String, job: Job): Boolean {
+        require(runId.isNotBlank()) { "Run id must not be blank" }
+        val cancelled = synchronized(lock) {
+            if (runId in cancelledRunIds) {
+                true
+            } else {
+                jobsByRunId.getOrPut(runId) { mutableSetOf() }.add(job)
+                false
+            }
+        }
+        if (cancelled) {
+            job.cancel(CancellationException("Agent run was cancelled"))
+            return false
         }
         job.invokeOnCompletion {
             synchronized(lock) {
@@ -217,15 +274,21 @@ internal class RuntimeToolJobTracker {
                 if (jobs.isEmpty()) jobsByRunId.remove(runId)
             }
         }
+        return true
     }
 
     fun cancel(runId: String, message: String) {
-        val jobs = synchronized(lock) { jobsByRunId.remove(runId)?.toList().orEmpty() }
+        val jobs = synchronized(lock) {
+            cancelledRunIds.add(runId)
+            jobsByRunId.remove(runId)?.toList().orEmpty()
+        }
         jobs.forEach { job -> job.cancel(CancellationException(message)) }
     }
 
     fun cancelAll(message: String) {
         val jobs = synchronized(lock) {
+            cancelledRunIds += activeRunIds
+            cancelledRunIds += jobsByRunId.keys
             jobsByRunId.values.flatMap { it.toList() }.also { jobsByRunId.clear() }
         }
         jobs.forEach { job -> job.cancel(CancellationException(message)) }
