@@ -38,7 +38,7 @@ docs/                         技术方案与真机指南
 
 ## 本地验证
 
-需要 Node.js 22.12+、pnpm 10.29.1、JDK 17、Android SDK Platform 37 和 Build Tools 36.0.0。
+需要 Node.js 22.12+、pnpm 10.29.1、JDK 17、Android SDK Platform 36 和 Build Tools 36.0.0。
 
 ```powershell
 cd C:\Users\junte\Code\agentdock

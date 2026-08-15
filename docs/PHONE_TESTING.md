@@ -8,7 +8,7 @@
 
 1. 从 [Android Developers](https://developer.android.com/studio) 安装 Android Studio。
 2. 打开 `Tools > SDK Manager`。
-3. 在 `SDK Platforms` 安装 Android API 37。
+3. 在 `SDK Platforms` 安装 Android API 36。
 4. 在 `SDK Tools` 安装：
    - Android SDK Build-Tools 36.0.0 或更新版本
    - Android SDK Platform-Tools（包含 `adb`）

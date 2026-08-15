@@ -190,7 +190,7 @@ API Key 和 SSH 私钥不得明文放进普通 SQLite；第二阶段用 Android 
 
 - Kotlin + Jetpack Compose。
 - AGP 9.3.0、Gradle 9.5.0、JDK 17。
-- `compileSdk/targetSdk 37`，`minSdk 26`。
+- `compileSdk/targetSdk 36`，`minSdk 26`。
 - Compose BOM 2026.06.00。
 - 单 Activity、ViewModel + Repository；数据库和文件 IO 在后台 dispatcher。
 
