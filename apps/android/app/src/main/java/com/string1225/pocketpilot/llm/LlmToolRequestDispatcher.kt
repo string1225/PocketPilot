@@ -33,7 +33,9 @@ class LlmToolRequestDispatcher(
         return try {
             val completionRequest = LlmNativeRequestCodec.decode(request.argumentsJson)
             val response = runInterruptible(Dispatchers.IO) {
-                client.complete(completionRequest)
+                client.complete(completionRequest) { event ->
+                    request.progressSink.emit(LlmNativeRequestCodec.encodeProgress(event).toString())
+                }
             }
             NativeToolResult(
                 JSONObject()

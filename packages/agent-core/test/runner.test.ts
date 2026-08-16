@@ -93,6 +93,73 @@ describe("DefaultAgentRunner", () => {
     });
   });
 
+  it("emits stable incremental assistant events and cumulative token usage", async () => {
+    const provider: AgentProvider = {
+      name: "streaming",
+      complete: async (request) => {
+        request.onStreamEvent?.({ contentDelta: "你" });
+        request.onStreamEvent?.({ contentDelta: "好" });
+        return {
+          content: "你好",
+          usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 }
+        };
+      }
+    };
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry(),
+      now: () => 100
+    }).run(input());
+
+    expect(result.events.map(({ type }) => type)).toEqual([
+      "run.started",
+      "assistant.delta",
+      "assistant.delta",
+      "assistant.message",
+      "run.completed"
+    ]);
+    expect(result.events[1]).toMatchObject({
+      messageId: "run-1:assistant:1",
+      delta: "你",
+      content: "你"
+    });
+    expect(result.events[2]).toMatchObject({
+      messageId: "run-1:assistant:1",
+      delta: "好",
+      content: "你好"
+    });
+    expect(result.events[3]).toMatchObject({
+      messageId: "run-1:assistant:1",
+      content: "你好",
+      usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 }
+    });
+    expect(result.events[4]).toMatchObject({
+      usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 }
+    });
+  });
+
+  it("adds provider usage across tool steps", async () => {
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [{ id: "call-usage", name: "test.echo", arguments: {} }],
+        usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 }
+      },
+      {
+        content: "Done",
+        usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 }
+      }
+    ]);
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry().register(echoTool)
+    }).run(input());
+
+    expect(result.events[result.events.length - 1]).toMatchObject({
+      type: "run.completed",
+      usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 }
+    });
+  });
+
   it("stops on explicit permission refusal", async () => {
     const provider = new ScriptedProvider([
       { toolCalls: [{ id: "call-1", name: "test.echo", arguments: {} }] }
@@ -145,6 +212,30 @@ describe("DefaultAgentRunner", () => {
     expect(started).toHaveBeenCalledOnce();
     controller.abort();
     await expect(run).resolves.toMatchObject({ status: "cancelled", steps: 1 });
+  });
+
+  it("finalizes already streamed text when the provider fails", async () => {
+    const provider: AgentProvider = {
+      name: "broken-stream",
+      complete: async (request) => {
+        request.onStreamEvent?.({ contentDelta: "partial" });
+        throw new Error("connection dropped");
+      }
+    };
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry()
+    }).run(input());
+
+    expect(result.status).toBe("failed");
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "assistant.message",
+        messageId: "run-1:assistant:1",
+        content: "partial",
+        status: "failed"
+      })
+    ]));
   });
 
   it("does not construct AbortController when the caller supplies a signal", async () => {

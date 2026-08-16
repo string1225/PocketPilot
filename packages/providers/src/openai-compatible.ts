@@ -4,7 +4,7 @@ import type {
   ProviderResponse
 } from "@pocketpilot/agent-core";
 
-export const DEFAULT_LLM_MODEL = "glm-5.2";
+export const DEFAULT_LLM_MODEL = "glm-5.3";
 export const DEFAULT_CHAT_COMPLETIONS_BASE_URL =
   "https://open.bigmodel.cn/api/coding/paas/v4";
 export const DEFAULT_RESPONSES_BASE_URL = "https://open.bigmodel.cn/api/v1";

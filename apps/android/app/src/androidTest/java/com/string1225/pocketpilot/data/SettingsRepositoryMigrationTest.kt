@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.string1225.pocketpilot.model.GLM_CHAT_BASE_URL
+import com.string1225.pocketpilot.model.GLM_IMAGE_MODEL
 import com.string1225.pocketpilot.model.LlmProviderPreference
 import java.util.UUID
 import org.junit.Assert.assertEquals
@@ -21,7 +22,8 @@ class SettingsRepositoryMigrationTest {
 
         val settings = repository.load()
         assertEquals(LlmProviderPreference.GLM, settings.llmProvider)
-        assertEquals("glm-5.2", settings.modelName)
+        assertEquals("glm-5.3", settings.modelName)
+        assertEquals(GLM_IMAGE_MODEL, settings.imageModelName)
         assertEquals(GLM_CHAT_BASE_URL, settings.llmBaseUrl)
         assertEquals(LlmProviderPreference.GLM.value, repository.get(SettingsRepository.KEY_LLM_PROVIDER))
     }
@@ -37,6 +39,8 @@ class SettingsRepositoryMigrationTest {
             assertEquals("", settings.llmBaseUrl)
             assertEquals("", settings.openAiModelName)
             assertEquals("", settings.openAiBaseUrl)
+            assertEquals("", settings.imageModelName)
+            assertEquals("", settings.openAiImageModelName)
         }
 
     @Test
@@ -52,6 +56,7 @@ class SettingsRepositoryMigrationTest {
         assertEquals("https://gateway.example/v1", settings.llmBaseUrl)
         assertEquals("legacy-custom-model", settings.openAiModelName)
         assertEquals("https://gateway.example/v1", settings.openAiBaseUrl)
+        assertEquals("", settings.imageModelName)
     }
 
     @Test
@@ -103,7 +108,7 @@ class SettingsRepositoryMigrationTest {
 
             assertTrue(repository.migrateLegacyLlmConnection(credentialConfigured = true))
 
-            assertEquals("glm-5.2", repository.load().modelName)
+            assertEquals("glm-5.3", repository.load().modelName)
         }
 
     private fun withRepository(

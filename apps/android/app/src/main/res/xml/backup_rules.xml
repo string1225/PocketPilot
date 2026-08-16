@@ -3,5 +3,6 @@
     <exclude domain="database" path="pocketpilot.db" />
     <exclude domain="file" path="projects/" />
     <exclude domain="file" path="plugins/" />
+    <exclude domain="file" path="attachments/" />
     <exclude domain="sharedpref" path="pocketpilot.credentials.v1.xml" />
 </full-backup-content>

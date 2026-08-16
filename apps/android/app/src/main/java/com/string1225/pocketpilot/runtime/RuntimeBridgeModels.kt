@@ -28,7 +28,17 @@ data class NativeToolRequest(
     val name: String,
     /** Canonical JSON for the protocol's unconstrained `arguments` value. */
     val argumentsJson: String,
+    /** Native-only observer; it is never decoded from untrusted JavaScript. */
+    val progressSink: NativeToolProgressSink = NoOpNativeToolProgressSink,
 )
+
+fun interface NativeToolProgressSink {
+    fun emit(payloadJson: String)
+}
+
+private object NoOpNativeToolProgressSink : NativeToolProgressSink {
+    override fun emit(payloadJson: String) = Unit
+}
 
 /** A structured Agent event plus its complete, lossless JSON payload. */
 data class AgentRuntimeEvent(

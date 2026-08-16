@@ -147,7 +147,7 @@ fun SettingsScreen(
             item {
                 SettingsValueRow(
                     icon = Icons.Default.Tune,
-                    title = ppText(language, "个性化 / 灵魂提示词", "Personalization / system prompt"),
+                    title = ppText(language, "个性化", "Personalization"),
                     value = settings.personalization.ifBlank { ppText(language, "使用默认行为", "Default behavior") },
                     onClick = { editableSetting = EditableSetting.PERSONALIZATION },
                 )
@@ -411,8 +411,8 @@ private fun EditableSettingDialog(
     val title = when (field) {
         EditableSetting.PERSONALIZATION -> ppText(
             language,
-            "个性化 / 灵魂提示词",
-            "Personalization / system prompt",
+            "个性化",
+            "Personalization",
         )
     }
     AlertDialog(
@@ -429,6 +429,15 @@ private fun EditableSettingDialog(
                     minLines = if (field == EditableSetting.PERSONALIZATION) 4 else 1,
                     maxLines = if (field == EditableSetting.PERSONALIZATION) 8 else 2,
                     label = { Text(title) },
+                    placeholder = {
+                        Text(
+                            ppText(
+                                language,
+                                "例如：回答简洁直接；先给结论，再说明关键依据。",
+                                "For example: Be concise; lead with the conclusion, then explain the key reasons.",
+                            ),
+                        )
+                    },
                 )
             }
         },
@@ -486,6 +495,15 @@ private fun ModelSettingsDialog(
         mutableStateOf(
             settings.openAiModelName.ifBlank {
                 settings.modelName.takeIf {
+                    settings.llmProvider == LlmProviderPreference.OPENAI_CHAT
+                }.orEmpty()
+            },
+        )
+    }
+    var openAiImageModel by rememberSaveable {
+        mutableStateOf(
+            settings.openAiImageModelName.ifBlank {
+                settings.imageModelName.takeIf {
                     settings.llmProvider == LlmProviderPreference.OPENAI_CHAT
                 }.orEmpty()
             },
@@ -580,10 +598,37 @@ private fun ModelSettingsDialog(
                             LlmProviderPreference.GLM -> glmModel = value.take(128)
                         }
                     },
-                    label = { Text(ppText(language, "模型编码", "Model code")) },
+                    label = { Text(ppText(language, "默认文本模型", "Default text model")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (provider == LlmProviderPreference.OPENAI_CHAT) {
+                    OutlinedTextField(
+                        value = openAiImageModel,
+                        onValueChange = { openAiImageModel = it.take(128) },
+                        label = { Text(ppText(language, "图片模型", "Image model")) },
+                        supportingText = {
+                            Text(
+                                ppText(
+                                    language,
+                                    "用于图片理解，必须支持 Chat Completions 的 image_url 输入。",
+                                    "Used for image understanding; it must accept image_url input through Chat Completions.",
+                                ),
+                            )
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        ppText(
+                            language,
+                            "图片识别固定使用 GLM-5V-Turbo（官方视觉 Endpoint）。",
+                            "Image understanding always uses GLM-5V-Turbo through its official vision endpoint.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(
                     value = secret,
                     onValueChange = { secret = it.take(16_384) },
@@ -611,11 +656,20 @@ private fun ModelSettingsDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Text(
+                    ppText(
+                        language,
+                        "保存时会分别测试默认文本模型和图片模型；测试未通过则不会启用这组连接。",
+                        "Saving tests both the default text model and image model; the connection is not enabled unless both tests pass.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         },
         confirmButton = {
             TextButton(
                 enabled = model.isNotBlank() &&
+                    (provider == LlmProviderPreference.GLM || openAiImageModel.isNotBlank()) &&
                     (provider == LlmProviderPreference.GLM ||
                         LlmSettingsPolicy.isValidOpenAiBaseUrl(resolvedBaseUrl)) &&
                     (!requiresNewCredential || secret.isNotBlank()),
@@ -630,11 +684,17 @@ private fun ModelSettingsDialog(
                             llmBaseUrl = resolvedBaseUrl,
                             openAiModelName = openAiModel.trim(),
                             openAiBaseUrl = openAiBaseUrl.trim(),
+                            imageModelName = if (provider == LlmProviderPreference.GLM) {
+                                provider.defaultImageModel
+                            } else {
+                                openAiImageModel.trim()
+                            },
+                            openAiImageModelName = openAiImageModel.trim(),
                         ),
                         submittedSecret,
                     )
                 },
-            ) { Text(ppText(language, "保存", "Save")) }
+            ) { Text(ppText(language, "保存并测试", "Save & test")) }
         },
         dismissButton = {
             Row {
@@ -1017,6 +1077,7 @@ private fun ToolSettingsDialog(
             ),
         )
         add("Network" to listOf("http.request"))
+        add("Vision" to listOf("image.analyze"))
         add("Sandbox" to listOf("execute_js", "execute_ts"))
         add("SSH" to listOf("ssh.execute"))
         val pluginTools = plugins.filter(InstalledPlugin::enabled)

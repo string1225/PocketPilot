@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.string1225.pocketpilot.model.AgentRunStatus
+import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 import com.string1225.pocketpilot.model.ToolApprovalRequest
@@ -23,7 +24,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -33,6 +33,7 @@ data class CoordinatedAgentRun(
     val projectId: String,
     val conversationId: String,
     val task: String,
+    val attachments: List<ChatImageAttachment> = emptyList(),
     val status: AgentRunStatus,
     val timeline: List<TimelineItem>,
     val startedAt: Long,
@@ -74,17 +75,20 @@ class AgentRunCoordinator(
     private val transcriptChannels = ConcurrentHashMap<String, Channel<TranscriptCommand>>()
     private val transcriptJobs = ConcurrentHashMap<String, Job>()
     private val runLock = Any()
+    private val finishingRunIds = mutableSetOf<String>()
     private val mutableRuns = MutableStateFlow<Map<String, CoordinatedAgentRun>>(emptyMap())
+    private val taskQueue = PendingAgentTaskQueue()
 
     val runs: StateFlow<Map<String, CoordinatedAgentRun>> = mutableRuns.asStateFlow()
+    val pendingTasks: StateFlow<List<PendingAgentTask>> = taskQueue.tasks
     val pendingApprovals: StateFlow<List<ToolApprovalRequest>> = service.pendingApprovals
 
     init {
         scope.launch {
             service.pendingApprovals.collectLatest { approvals ->
                 val waitingRunIds = approvals.mapTo(mutableSetOf()) { it.runId }
-                mutableRuns.update { current ->
-                    current.mapValues { (runId, run) ->
+                synchronized(runLock) {
+                    mutableRuns.value = mutableRuns.value.mapValues { (runId, run) ->
                         when {
                             runId in waitingRunIds && run.status == AgentRunStatus.RUNNING ->
                                 run.copy(status = AgentRunStatus.WAITING_FOR_APPROVAL)
@@ -101,24 +105,88 @@ class AgentRunCoordinator(
         }
     }
 
-    fun start(projectId: String, conversationId: String, task: String): String {
+    fun start(
+        projectId: String,
+        conversationId: String,
+        task: String,
+        attachments: List<ChatImageAttachment> = emptyList(),
+    ): String = startPending(createPendingTask(projectId, conversationId, task, attachments))
+
+    fun enqueueOrStart(
+        projectId: String,
+        conversationId: String,
+        task: String,
+        attachments: List<ChatImageAttachment> = emptyList(),
+    ): AgentTaskSubmission {
+        val submitted = createPendingTask(projectId, conversationId, task, attachments)
+        synchronized(runLock) {
+            taskQueue.enqueue(submitted)
+            if (mutableRuns.value.values.any { it.projectId == projectId && !it.status.isTerminal }) {
+                return AgentTaskSubmission(submitted.id, queued = true)
+            }
+            val next = checkNotNull(taskQueue.dequeue(projectId))
+            return try {
+                startPending(next)
+                AgentTaskSubmission(submitted.id, queued = next.id != submitted.id).also {
+                    if (next.id != submitted.id) {
+                        // The older task was retried first; the new submission stays queued.
+                        check(taskQueue.hasProject(projectId))
+                    }
+                }
+            } catch (error: Throwable) {
+                if (next.id != submitted.id) {
+                    // The caller receives an error and keeps its draft. Remove
+                    // this submission as well, otherwise a retry would execute
+                    // the same user request twice after the older task recovers.
+                    taskQueue.remove(submitted.id)
+                    taskQueue.prepend(next)
+                }
+                throw error
+            }
+        }
+    }
+
+    private fun createPendingTask(
+        projectId: String,
+        conversationId: String,
+        task: String,
+        attachments: List<ChatImageAttachment>,
+    ): PendingAgentTask {
         require(projectId.isNotBlank()) { "Project id must not be blank" }
         require(conversationId.isNotBlank()) { "Conversation id must not be blank" }
         val normalizedTask = task.trim()
         require(normalizedTask.isNotEmpty()) { "Task must not be empty" }
-        val runId = UUID.randomUUID().toString()
+        require(attachments.all { it.projectId == projectId }) { "Attachment belongs to another project" }
+        val now = System.currentTimeMillis()
         val userItem = TimelineItem(
             id = UUID.randomUUID().toString(),
             kind = TimelineItemKind.USER,
             title = "You",
             body = normalizedTask,
-            createdAt = System.currentTimeMillis(),
+            createdAt = now,
+            status = "queued",
+            attachments = attachments,
         )
-        val run = CoordinatedAgentRun(
-            runId = runId,
+        return PendingAgentTask(
+            id = UUID.randomUUID().toString(),
             projectId = projectId,
             conversationId = conversationId,
             task = normalizedTask,
+            attachments = attachments,
+            userItem = userItem,
+            queuedAt = now,
+        )
+    }
+
+    private fun startPending(pending: PendingAgentTask): String {
+        val runId = UUID.randomUUID().toString()
+        val userItem = pending.userItem.copy(status = "sent")
+        val run = CoordinatedAgentRun(
+            runId = runId,
+            projectId = pending.projectId,
+            conversationId = pending.conversationId,
+            task = pending.task,
+            attachments = pending.attachments,
             status = AgentRunStatus.RUNNING,
             timeline = listOf(userItem),
             startedAt = userItem.createdAt,
@@ -126,7 +194,7 @@ class AgentRunCoordinator(
         synchronized(runLock) {
             check(
                 mutableRuns.value.values.none {
-                    it.projectId == projectId && !it.status.isTerminal
+                    it.projectId == pending.projectId && !it.status.isTerminal
                 },
             ) { "This project already has an active run" }
             mutableRuns.value = mutableRuns.value + (runId to run)
@@ -134,9 +202,9 @@ class AgentRunCoordinator(
         val foregroundIntent = AgentRunForegroundService.startIntent(
             context = appContext,
             runId = runId,
-            projectId = projectId,
-            conversationId = conversationId,
-            task = normalizedTask,
+            projectId = pending.projectId,
+            conversationId = pending.conversationId,
+            task = pending.task,
         )
         try {
             ContextCompat.startForegroundService(appContext, foregroundIntent)
@@ -149,7 +217,13 @@ class AgentRunCoordinator(
         transcriptChannels[runId]?.trySend(TranscriptCommand.Append(run, userItem))
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val terminalStatus = try {
-                service.runAgent(projectId, conversationId, runId, normalizedTask) { item ->
+                service.runAgent(
+                    pending.projectId,
+                    pending.conversationId,
+                    runId,
+                    pending.task,
+                    pending.attachments,
+                ) { item ->
                     appendTimeline(runId, item)
                 }
             } catch (cancelled: CancellationException) {
@@ -187,6 +261,7 @@ class AgentRunCoordinator(
     }
 
     fun cancelAll() {
+        taskQueue.clear()
         mutableRuns.value.values
             .filterNot { it.status.isTerminal }
             .forEach { cancel(it.runId) }
@@ -200,17 +275,23 @@ class AgentRunCoordinator(
 
     fun hasActiveRuns(): Boolean = mutableRuns.value.values.any { !it.status.isTerminal }
 
+    fun hasQueuedProjectTasks(projectId: String): Boolean = taskQueue.hasProject(projectId)
+
+    fun hasQueuedConversationTasks(conversationId: String): Boolean = taskQueue.hasConversation(conversationId)
+
     fun resolveApproval(requestId: String, approved: Boolean): Boolean =
         service.resolveApproval(requestId, approved)
 
     fun removeTerminalRun(runId: String) {
-        mutableRuns.update { current ->
+        synchronized(runLock) {
+            val current = mutableRuns.value
             val run = current[runId]
-            if (run == null || !run.status.isTerminal) current else current - runId
+            if (run != null && run.status.isTerminal) mutableRuns.value = current - runId
         }
     }
 
     override fun close() {
+        taskQueue.clear()
         jobs.values.forEach { it.cancel(CancellationException("Application is closing")) }
         jobs.clear()
         transcriptChannels.values.forEach { it.close() }
@@ -219,33 +300,73 @@ class AgentRunCoordinator(
     }
 
     private fun appendTimeline(runId: String, item: TimelineItem) {
-        var updated: CoordinatedAgentRun? = null
-        mutableRuns.update { current ->
-            val run = current[runId] ?: return@update current
-            run.copy(timeline = run.timeline + item).also { next ->
-                updated = next
-            }.let { current + (runId to it) }
+        synchronized(runLock) {
+            // RuntimeEventRouter may already have dequeued a callback when its
+            // subscription closes. Once finish() takes the terminal snapshot,
+            // reject every such late delta atomically.
+            if (runId in finishingRunIds) return
+            val current = mutableRuns.value
+            val run = current[runId] ?: return
+            if (run.status.isTerminal) return
+            val nextTimeline = upsertTimelineItem(run.timeline, item)
+            val normalizedItem = nextTimeline.first { it.id == item.id }
+            val next = run.copy(timeline = nextTimeline)
+            mutableRuns.value = current + (runId to next)
+            // Acceptance and transcript admission are one atomic operation.
+            // finish() uses the same lock before removing/closing this channel,
+            // so a final assistant/error event cannot be visible in UI but lost
+            // from SQLite in the gap between these two writes.
+            transcriptChannels[runId]?.trySend(TranscriptCommand.Append(next, normalizedItem))
         }
-        updated?.let { run -> transcriptChannels[runId]?.trySend(TranscriptCommand.Append(run, item)) }
     }
 
     private suspend fun finish(runId: String, requestedStatus: AgentRunStatus) {
         val terminalStatus = if (requestedStatus.isTerminal) requestedStatus else AgentRunStatus.FAILED
-        var finished: CoordinatedAgentRun? = null
-        mutableRuns.update { current ->
-            val run = current[runId] ?: return@update current
+        val (finishing, finalizedStreamItems) = synchronized(runLock) {
+            val current = mutableRuns.value
+            val run = mutableRuns.value[runId] ?: return
+            if (!finishingRunIds.add(runId)) return
+            val finalizedTimeline = finalizeStreamingTimeline(run.timeline, terminalStatus)
+            if (finalizedTimeline !== run.timeline) {
+                mutableRuns.value = current + (runId to run.copy(timeline = finalizedTimeline))
+            }
             run.copy(
                 status = terminalStatus,
+                timeline = finalizedTimeline,
                 completedAt = System.currentTimeMillis(),
-            ).also { next ->
-                finished = next
-            }.let { current + (runId to it) }
+            ) to finalizedTimeline.filterIndexed { index, item -> item !== run.timeline[index] }
         }
-        val run = finished ?: return
+
+        // Keep the current Run non-terminal until every transcript command has
+        // reached SQLite. A queued Run builds its model history immediately, so
+        // starting it before this join would intermittently omit the previous
+        // assistant response from the next request.
         val channel = transcriptChannels.remove(runId)
-        channel?.trySend(TranscriptCommand.Finish(run))
+        finalizedStreamItems.forEach { item ->
+            channel?.trySend(TranscriptCommand.Append(finishing, item))
+        }
+        channel?.trySend(TranscriptCommand.Finish(finishing))
         channel?.close()
         transcriptJobs.remove(runId)?.join()
+
+        var finished: CoordinatedAgentRun? = null
+        synchronized(runLock) {
+            val current = mutableRuns.value
+            val run = current[runId] ?: return
+            val terminalRun = run.copy(status = finishing.status, completedAt = finishing.completedAt)
+            finished = terminalRun
+            mutableRuns.value = current + (runId to terminalRun)
+            finishingRunIds.remove(runId)
+
+            taskQueue.dequeue(run.projectId)?.let { next ->
+                runCatching { startPending(next) }
+                    .onFailure { error ->
+                        taskQueue.prepend(next)
+                        Log.e(TAG, "Unable to start queued Agent task", error)
+                    }
+            }
+        }
+        val run = finished ?: return
         AgentNotifications.showCompletion(appContext, run)
         if (mutableRuns.value.values.none { !it.status.isTerminal }) {
             // Let the Service stop itself with its startId. A direct
@@ -267,12 +388,24 @@ class AgentRunCoordinator(
         check(transcriptChannels.putIfAbsent(run.runId, channel) == null)
         val writer = scope.launch {
             try {
-                transcriptStore.runStarted(run)
+                try {
+                    transcriptStore.runStarted(run)
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    Log.e(TAG, "Unable to persist Agent transcript start", error)
+                }
                 for (command in channel) {
-                    when (command) {
-                        is TranscriptCommand.Append ->
-                            transcriptStore.timelineAppended(command.run, command.item)
-                        is TranscriptCommand.Finish -> transcriptStore.runFinished(command.run)
+                    try {
+                        when (command) {
+                            is TranscriptCommand.Append ->
+                                transcriptStore.timelineAppended(command.run, command.item)
+                            is TranscriptCommand.Finish -> transcriptStore.runFinished(command.run)
+                        }
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        // A malformed or temporarily failed event must not make
+                        // every later assistant/final message disappear.
+                        Log.e(TAG, "Unable to persist one Agent transcript event", error)
                     }
                 }
             } catch (error: Throwable) {
@@ -297,3 +430,37 @@ private val AgentRunStatus.isTerminal: Boolean
     get() = this == AgentRunStatus.COMPLETED ||
         this == AgentRunStatus.FAILED ||
         this == AgentRunStatus.CANCELLED
+
+internal fun upsertTimelineItem(
+    timeline: List<TimelineItem>,
+    incoming: TimelineItem,
+): List<TimelineItem> {
+    val index = timeline.indexOfFirst { it.id == incoming.id }
+    if (index < 0) return timeline + incoming
+    val original = timeline[index]
+    return timeline.toMutableList().also {
+        it[index] = incoming.copy(createdAt = original.createdAt)
+    }
+}
+
+internal fun finalizeStreamingTimeline(
+    timeline: List<TimelineItem>,
+    terminalStatus: AgentRunStatus,
+): List<TimelineItem> {
+    val messageStatus = when (terminalStatus) {
+        AgentRunStatus.COMPLETED -> "completed"
+        AgentRunStatus.FAILED -> "failed"
+        AgentRunStatus.CANCELLED -> "cancelled"
+        else -> return timeline
+    }
+    var changed = false
+    val finalized = timeline.map { item ->
+        if (item.kind == TimelineItemKind.ASSISTANT && item.status == "running") {
+            changed = true
+            item.copy(status = messageStatus)
+        } else {
+            item
+        }
+    }
+    return if (changed) finalized else timeline
+}

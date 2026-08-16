@@ -35,7 +35,10 @@ class OpenAiCompatibleLlmClient(
         require(maxResponseBytes in 1..MAX_BODY_LIMIT_BYTES) { "Invalid LLM response size limit" }
     }
 
-    fun complete(request: LlmCompletionRequest): LlmProviderResponse {
+    fun complete(
+        request: LlmCompletionRequest,
+        onStreamEvent: (LlmStreamEvent) -> Unit = {},
+    ): LlmProviderResponse {
         val endpoint = LlmEndpointPolicy.resolve(request.config).toURL()
         val secret = try {
             credentials.get(request.config.credentialId)
@@ -77,7 +80,14 @@ class OpenAiCompatibleLlmClient(
                 doOutput = true
                 setRequestProperty("Authorization", "Bearer $secretText")
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Accept", "application/json")
+                setRequestProperty(
+                    "Accept",
+                    if (request.stream && request.config.protocol == LlmProtocol.CHAT_COMPLETIONS) {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                )
                 setRequestProperty("Accept-Encoding", "identity")
                 setFixedLengthStreamingMode(requestBytes.size)
             }
@@ -95,6 +105,23 @@ class OpenAiCompatibleLlmClient(
                     errorBytes.fill(0)
                 }
                 throw httpError(status, redactSecret(message, secretText))
+            }
+
+            if (request.stream && request.config.protocol == LlmProtocol.CHAT_COMPLETIONS) {
+                return try {
+                    completeChatCompletionsStream(
+                        request = request,
+                        input = activeConnection.inputStream,
+                        secret = secretText,
+                        onStreamEvent = onStreamEvent,
+                    )
+                } catch (error: LlmProtocolException) {
+                    throw LlmProtocolException(
+                        error.code,
+                        redactSecret(error.message, secretText) ?: "LLM stream could not be processed",
+                        error.retryable,
+                    )
+                }
             }
 
             val responseBytes = readBody(activeConnection.inputStream, maxResponseBytes)
@@ -136,6 +163,27 @@ class OpenAiCompatibleLlmClient(
             secret.fill('\u0000')
             connection?.disconnect()
         }
+    }
+
+    private fun completeChatCompletionsStream(
+        request: LlmCompletionRequest,
+        input: InputStream,
+        secret: String,
+        onStreamEvent: (LlmStreamEvent) -> Unit,
+    ): LlmProviderResponse {
+        val decoder = OpenAiCompatibleProtocolCodec.newChatCompletionsStreamDecoder(request)
+        val safeEmitter = CredentialSafeDeltaEmitter(secret) { delta ->
+            onStreamEvent(LlmStreamEvent(contentDelta = delta))
+        }
+        ServerSentEventReader(input, maxResponseBytes).read { data ->
+            val event = decoder.accept(data) ?: return@read
+            event.contentDelta?.let(safeEmitter::accept)
+            event.usage?.let { usage -> onStreamEvent(LlmStreamEvent(usage = usage)) }
+        }
+        val response = decoder.finish()
+        safeEmitter.finish()
+        requireNoCredentialEcho(response, secret)
+        return response
     }
 
     private fun readBody(stream: InputStream?, limit: Int): ByteArray {
@@ -233,5 +281,46 @@ class OpenAiCompatibleLlmClient(
         private const val MAX_ERROR_BODY_BYTES = 256 * 1024
         private const val MAX_BODY_LIMIT_BYTES = 16 * 1024 * 1024
         private const val MAX_CREDENTIAL_CHARACTERS = 16 * 1024
+    }
+}
+
+/**
+ * Holds back enough trailing text to detect an exact credential echoed across
+ * adjacent SSE chunks before any credential bytes can cross into WebView.
+ */
+private class CredentialSafeDeltaEmitter(
+    private val secret: String,
+    private val emit: (String) -> Unit,
+) {
+    private val pending = StringBuilder()
+
+    fun accept(delta: String) {
+        if (delta.isEmpty()) return
+        pending.append(delta)
+        rejectCredentialEcho()
+        val retainedCharacters = (secret.length - 1).coerceAtLeast(0)
+        val safeCharacters = (pending.length - retainedCharacters).coerceAtLeast(0)
+        if (safeCharacters > 0) release(safeCharacters)
+    }
+
+    fun finish() {
+        rejectCredentialEcho()
+        if (pending.isNotEmpty()) release(pending.length)
+    }
+
+    private fun rejectCredentialEcho() {
+        if (pending.indexOf(secret) >= 0) {
+            pending.setLength(0)
+            throw LlmProtocolException(
+                "LLM_SECRET_ECHO",
+                "LLM response was blocked because it contained credential material",
+            )
+        }
+    }
+
+    private fun release(characters: Int) {
+        val value = pending.substring(0, characters)
+        pending.delete(0, characters)
+        emit(value)
     }
 }

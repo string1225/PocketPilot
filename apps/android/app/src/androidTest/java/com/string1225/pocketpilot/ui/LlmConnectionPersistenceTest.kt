@@ -8,6 +8,7 @@ import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.model.GLM_CHAT_BASE_URL
 import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.llm.LlmConnectionVerifier
 import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import com.string1225.pocketpilot.security.CredentialIds
 import com.string1225.pocketpilot.security.SecureCredentialStore
@@ -128,12 +129,39 @@ class LlmConnectionPersistenceTest {
         assertFalse(credentials.contains(CredentialIds.DEFAULT_LLM))
     }
 
+    @Test
+    fun failedConnectionProbeDoesNotPersistSettingsOrCredential() {
+        val verifier = LlmConnectionVerifier { _, _ ->
+            throw IllegalArgumentException("connection rejected")
+        }
+        val secret = "candidate-ak".toCharArray()
+        try {
+            assertThrows(IllegalArgumentException::class.java) {
+                persistLlmConnection(
+                    openAiSettings(),
+                    secret,
+                    settings,
+                    credentials,
+                    gate,
+                    verifier,
+                )
+            }
+        } finally {
+            secret.fill('\u0000')
+        }
+
+        assertEquals("", settings.load().modelName)
+        assertFalse(credentials.contains(CredentialIds.DEFAULT_LLM))
+    }
+
     private fun openAiSettings(): PocketPilotSettings = PocketPilotSettings(
         llmProvider = LlmProviderPreference.OPENAI_CHAT,
         modelName = "custom-model",
         llmBaseUrl = "https://gateway.example/v1",
         openAiModelName = "custom-model",
         openAiBaseUrl = "https://gateway.example/v1",
+        imageModelName = "vision-model",
+        openAiImageModelName = "vision-model",
     )
 
     private fun glmSettings(): PocketPilotSettings = PocketPilotSettings(

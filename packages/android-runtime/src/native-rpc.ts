@@ -24,7 +24,12 @@ interface PendingCall {
   readonly projectId: string;
   readonly signal: AbortSignal;
   readonly onAbort: () => void;
+  readonly onProgress: ((payload: unknown) => void) | undefined;
   readonly resolve: (result: ToolResult<unknown>) => void;
+}
+
+export interface NativeRpcExecutionOptions {
+  readonly onProgress?: (payload: unknown) => void;
 }
 
 let nextEnvelopeId = 0;
@@ -87,6 +92,7 @@ export class NativeRpcClient {
     name: string,
     input: unknown,
     context: ToolContext,
+    options: NativeRpcExecutionOptions = {},
   ): Promise<ToolResult<unknown>> {
     if (context.signal.aborted) {
       return Promise.resolve(toolFailure("CANCELLED", "Tool execution was cancelled."));
@@ -125,6 +131,7 @@ export class NativeRpcClient {
         projectId: context.projectId,
         signal: context.signal,
         onAbort,
+        onProgress: options.onProgress,
         resolve
       });
       context.signal.addEventListener("abort", onAbort, { once: true });
@@ -184,6 +191,14 @@ export class NativeRpcClient {
     }
     if (envelope.type === "tool.error") {
       this.#settle(envelope.id, nativeErrorResult(envelope.payload));
+      return;
+    }
+    if (envelope.type === "tool.progress") {
+      try {
+        pending.onProgress?.(envelope.payload);
+      } catch {
+        // Progress is observational and cannot fail or settle the native call.
+      }
       return;
     }
     this.#settle(
@@ -453,6 +468,24 @@ const httpRequestSchema = objectSchema(
   ["url"],
 );
 
+const imageAnalyzeSchema = objectSchema(
+  {
+    attachmentId: {
+      type: "string",
+      minLength: 36,
+      maxLength: 64,
+      description: "An app-owned image attachment id from the current project. Never pass a URI, path, URL, or base64 image."
+    },
+    prompt: {
+      type: "string",
+      minLength: 1,
+      maxLength: 8_192,
+      description: "What to identify, read, or explain in the attached image."
+    }
+  },
+  ["attachmentId", "prompt"],
+);
+
 const nativeTool = (
   rpc: NativeRpcClient,
   name: string,
@@ -486,5 +519,6 @@ export const createNativeWorkspaceTools = (
   nativeTool(rpc, "git.pull", "Pull from an HTTPS Git remote after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.pull),
   nativeTool(rpc, "git.push", "Push to an HTTPS Git remote after native approval and return bounded update metadata; timeoutMillis is in milliseconds.", "network", gitSchemas.push),
   nativeTool(rpc, "http.request", "Send one bounded request to a public HTTP(S) endpoint and return status, safe response headers, body, bodyEncoding (utf8 or base64), and truncated. GET/HEAD over HTTPS run automatically; mutating methods and every cleartext request require native approval. Authentication headers and private-network targets are forbidden.", "network", httpRequestSchema),
+  nativeTool(rpc, "image.analyze", "Analyze one app-owned image attached to this project. The native layer selects the configured vision model and never exposes image bytes or credentials to JavaScript.", "network", imageAnalyzeSchema),
   nativeTool(rpc, "ssh.execute", "Execute one command after native approval; timeoutMillis is in milliseconds.", "remote", sshExecuteSchema)
 ];

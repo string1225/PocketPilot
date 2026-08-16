@@ -65,6 +65,20 @@ class RuntimeEnvelopeCodecTest {
     }
 
     @Test
+    fun echoesToolContextInProgress() {
+        val progress = JSONObject(
+            RuntimeEnvelopeCodec.encodeToolProgress(
+                RuntimeRequestContext("call-1", "run-1", "project-1"),
+                """{"contentDelta":"hello"}""",
+            ),
+        )
+
+        assertEquals("tool.progress", progress.getString("type"))
+        assertEquals("call-1", progress.getString("id"))
+        assertEquals("hello", progress.getJSONObject("payload").getString("contentDelta"))
+    }
+
+    @Test
     fun preservesEventContextAndPayload() {
         val inbound = RuntimeEnvelopeCodec.decodeInbound(
             """{"version":1,"id":"event-1","type":"event","runId":"run-1","projectId":"project-1","payload":{"type":"run.started","sequence":1}}""",

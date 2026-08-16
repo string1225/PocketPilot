@@ -13,6 +13,7 @@ class ConversationTranscriptStore(
         run: CoordinatedAgentRun,
         item: com.string1225.pocketpilot.model.TimelineItem,
     ) {
+        if (item.kind == TimelineItemKind.ASSISTANT && item.status == "running") return
         service.appendMessage(
             conversationId = run.conversationId,
             role = when (item.kind) {
@@ -28,6 +29,9 @@ class ConversationTranscriptStore(
             isError = item.isError,
             createdAt = item.createdAt,
             messageId = item.id,
+            status = item.status,
+            tokenUsage = item.tokenUsage,
+            attachments = item.attachments,
         )
     }
 

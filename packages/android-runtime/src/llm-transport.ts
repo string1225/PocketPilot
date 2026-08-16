@@ -2,6 +2,8 @@ import type {
   AgentMessage,
   ProviderRequest,
   ProviderResponse,
+  ProviderStreamEvent,
+  ProviderTokenUsage,
   ProviderToolCall
 } from "@pocketpilot/agent-core";
 import type {
@@ -24,6 +26,7 @@ export interface NativeLlmCompleteRequest {
   readonly baseUrl: string;
   readonly model: string;
   readonly credentialId: string;
+  readonly stream: true;
   readonly messages: readonly NativeLlmMessage[];
   readonly tools: readonly {
     readonly name: string;
@@ -90,6 +93,70 @@ const parseToolCall = (value: unknown): ProviderToolCall => {
   return { id: record.id, name: record.name, arguments: record.arguments };
 };
 
+const parseNonNegativeInteger = (
+  value: unknown,
+  field: string,
+): number | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      `Native LLM ${field} must be a non-negative safe integer.`,
+    );
+  }
+  return value;
+};
+
+const parseUsage = (value: unknown): ProviderTokenUsage | undefined => {
+  if (value === undefined) return undefined;
+  const record = asRecord(value);
+  if (record === undefined) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM token usage must be an object.",
+    );
+  }
+  const inputTokens = parseNonNegativeInteger(record.inputTokens, "inputTokens");
+  const outputTokens = parseNonNegativeInteger(record.outputTokens, "outputTokens");
+  const totalTokens = parseNonNegativeInteger(record.totalTokens, "totalTokens");
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens })
+  };
+};
+
+const parseStreamEvent = (value: unknown): ProviderStreamEvent => {
+  const record = asRecord(value);
+  if (record === undefined) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM stream event must be an object.",
+    );
+  }
+  const contentDelta = record.contentDelta;
+  if (contentDelta !== undefined && typeof contentDelta !== "string") {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM contentDelta must be a string.",
+    );
+  }
+  const usage = parseUsage(record.usage);
+  if (contentDelta === undefined && usage === undefined) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM stream event contains neither text nor usage.",
+    );
+  }
+  return {
+    ...(contentDelta === undefined ? {} : { contentDelta }),
+    ...(usage === undefined ? {} : { usage })
+  };
+};
+
 const parseProviderResponse = (value: unknown): ProviderResponse => {
   const record = asRecord(value);
   if (record === undefined) {
@@ -113,6 +180,7 @@ const parseProviderResponse = (value: unknown): ProviderResponse => {
     );
   }
   const toolCalls = rawToolCalls?.map(parseToolCall);
+  const usage = parseUsage(record.usage);
   if (content === undefined && toolCalls === undefined) {
     throw new NativeLlmTransportError(
       "LLM_INVALID_RESPONSE",
@@ -121,7 +189,8 @@ const parseProviderResponse = (value: unknown): ProviderResponse => {
   }
   return {
     ...(content === undefined ? {} : { content }),
-    ...(toolCalls === undefined ? {} : { toolCalls })
+    ...(toolCalls === undefined ? {} : { toolCalls }),
+    ...(usage === undefined ? {} : { usage })
   };
 };
 
@@ -141,6 +210,7 @@ export class NativeRpcLlmTransport implements NativeLlmTransport {
       baseUrl: config.baseUrl,
       model: config.model,
       credentialId: config.credentialId,
+      stream: true,
       messages: request.messages.map(serializeMessage),
       tools: request.tools.map((tool) => ({
         name: tool.name,
@@ -148,12 +218,33 @@ export class NativeRpcLlmTransport implements NativeLlmTransport {
         inputSchema: tool.inputSchema
       }))
     };
-    const result = await this.#rpc.execute("llm.complete", payload, {
-      runId: request.runId,
-      projectId: request.projectId,
-      callId: `llm:${request.runId}:${request.step}`,
-      signal: request.signal
-    });
+    let progressError: NativeLlmTransportError | undefined;
+    const result = await this.#rpc.execute(
+      "llm.complete",
+      payload,
+      {
+        runId: request.runId,
+        projectId: request.projectId,
+        callId: `llm:${request.runId}:${request.step}`,
+        signal: request.signal
+      },
+      {
+        onProgress: (value) => {
+          if (progressError !== undefined || request.signal.aborted) return;
+          try {
+            request.onStreamEvent?.(parseStreamEvent(value));
+          } catch (error) {
+            progressError = error instanceof NativeLlmTransportError
+              ? error
+              : new NativeLlmTransportError(
+                  "LLM_STREAM_CONSUMER_FAILED",
+                  "LLM stream event could not be processed.",
+                );
+          }
+        }
+      },
+    );
+    if (progressError !== undefined) throw progressError;
     if (!result.success) {
       throw new NativeLlmTransportError(
         result.error.code,

@@ -72,7 +72,10 @@ private const val ARTIFACTS_PAGE = 2
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun PocketPilotApp(viewModel: PocketPilotViewModel) {
+fun PocketPilotApp(
+    viewModel: PocketPilotViewModel,
+    speechInputController: SpeechInputController,
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val language = state.settings.language
     val snackbarHostState = remember { SnackbarHostState() }
@@ -98,6 +101,13 @@ fun PocketPilotApp(viewModel: PocketPilotViewModel) {
                 }
             }
         }
+    }
+
+    LaunchedEffect(state.selectedConversationId, showSettings, pagerState.currentPage) {
+        // A recognition callback is scoped to the draft that started it. Even
+        // when the chat page stays visible, switching conversations must revoke
+        // the old callback before it can write into the new draft.
+        speechInputController.stop()
     }
 
     PocketPilotTheme(preference = state.settings.theme) {
@@ -240,11 +250,16 @@ fun PocketPilotApp(viewModel: PocketPilotViewModel) {
                             CHAT_PAGE -> AgentScreen(
                                 timeline = state.timeline,
                                 input = state.agentInput,
+                                attachments = state.agentAttachments,
+                                queuedCount = state.queuedAgentTaskCount,
                                 status = state.agentStatus,
                                 offlineDemo = state.offlineDemo,
                                 runtimeAvailable = state.runtimeAvailable,
                                 language = language,
+                                speechInputController = speechInputController,
                                 onInputChange = viewModel::updateAgentInput,
+                                onImportImages = viewModel::importAgentImages,
+                                onRemoveAttachment = viewModel::removeAgentAttachment,
                                 onSend = viewModel::sendAgentTask,
                                 onCancel = viewModel::cancelAgent,
                             )

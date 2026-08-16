@@ -36,6 +36,7 @@ object LlmNativeRequestCodec {
             "baseUrl",
             "model",
             "credentialId",
+            "stream",
             "messages",
             "tools",
         )
@@ -100,7 +101,12 @@ object LlmNativeRequestCodec {
                 )
             }
         }
-        return LlmCompletionRequest(config, messages, tools)
+        val stream = when (val rawStream = root.opt("stream")) {
+            null -> false
+            is Boolean -> rawStream
+            else -> throw LlmProtocolException("LLM_INVALID_REQUEST", "stream must be a boolean")
+        }
+        return LlmCompletionRequest(config, messages, tools, stream)
     }
 
     fun encode(response: LlmProviderResponse): JSONObject {
@@ -127,6 +133,7 @@ object LlmNativeRequestCodec {
                     },
                 )
             }
+            response.usage?.let { usage -> put("usage", encodeUsage(usage)) }
         }
         if (JSONObject.quote(encoded.toString()).length > MAX_BRIDGE_ENCODED_RESPONSE_CHARS) {
             throw LlmProtocolException(
@@ -135,6 +142,32 @@ object LlmNativeRequestCodec {
             )
         }
         return encoded
+    }
+
+    fun encodeProgress(event: LlmStreamEvent): JSONObject {
+        if (event.contentDelta == null && event.usage == null) {
+            throw LlmProtocolException(
+                "LLM_INVALID_RESPONSE",
+                "LLM stream event contains neither text nor usage",
+            )
+        }
+        return JSONObject().apply {
+            event.contentDelta?.let { put("contentDelta", it) }
+            event.usage?.let { put("usage", encodeUsage(it)) }
+        }.also { encoded ->
+            if (JSONObject.quote(encoded.toString()).length > MAX_BRIDGE_ENCODED_RESPONSE_CHARS) {
+                throw LlmProtocolException(
+                    "LLM_RESPONSE_TOO_LARGE",
+                    "LLM stream event exceeded the serialized bridge size limit",
+                )
+            }
+        }
+    }
+
+    private fun encodeUsage(usage: LlmTokenUsage): JSONObject = JSONObject().apply {
+        usage.inputTokens?.let { put("inputTokens", it) }
+        usage.outputTokens?.let { put("outputTokens", it) }
+        usage.totalTokens?.let { put("totalTokens", it) }
     }
 
     private fun decodeToolCalls(calls: JSONArray): List<LlmToolCall> {
@@ -198,12 +231,24 @@ object OpenAiCompatibleProtocolCodec {
         }?.let(::sanitizeRemoteMessage)
     }
 
+    internal fun newChatCompletionsStreamDecoder(
+        request: LlmCompletionRequest,
+    ): ChatCompletionsStreamDecoder {
+        if (request.config.protocol != LlmProtocol.CHAT_COMPLETIONS) {
+            throw LlmProtocolException(
+                "LLM_UNSUPPORTED_PROTOCOL",
+                "SSE streaming is only supported for Chat Completions",
+            )
+        }
+        return ChatCompletionsStreamDecoder(request)
+    }
+
     private fun encodeChatCompletionsRequest(
         request: LlmCompletionRequest,
         aliases: ToolNameAliases,
     ): JSONObject = JSONObject()
         .put("model", request.config.model)
-        .put("stream", false)
+        .put("stream", request.stream)
         .put(
             "messages",
             JSONArray().apply {
@@ -247,6 +292,13 @@ object OpenAiCompatibleProtocolCodec {
             },
         )
         .apply {
+            if (request.stream && isOfficialOpenAiEndpoint(request.config.baseUrl)) {
+                put("stream_options", JSONObject().put("include_usage", true))
+            }
+            if (request.stream && isGlmEndpoint(request.config.baseUrl) && request.tools.isNotEmpty()) {
+                // GLM requires this vendor extension to emit incremental tool-call arguments.
+                put("tool_stream", true)
+            }
             if (request.tools.isNotEmpty()) {
                 put("tool_choice", "auto")
                 put(
@@ -370,7 +422,7 @@ object OpenAiCompatibleProtocolCodec {
         val content = decodeChatContent(message.opt("content"))
             ?: message.optString("refusal").takeIf(String::isNotBlank)
         val calls = decodeChatToolCalls(message.optJSONArray("tool_calls"), aliases)
-        return requireUsableResponse(content, calls)
+        return requireUsableResponse(content, calls, decodeUsage(root.optJSONObject("usage")))
     }
 
     private fun decodeResponsesResponse(
@@ -396,7 +448,11 @@ object OpenAiCompatibleProtocolCodec {
         if (textParts.isEmpty()) {
             root.optString("output_text").takeIf(String::isNotBlank)?.let(textParts::add)
         }
-        return requireUsableResponse(textParts.takeIf { it.isNotEmpty() }?.joinToString(""), calls)
+        return requireUsableResponse(
+            textParts.takeIf { it.isNotEmpty() }?.joinToString(""),
+            calls,
+            decodeResponsesUsage(root.optJSONObject("usage")),
+        )
     }
 
     private fun decodeChatContent(value: Any?): String? = when (value) {
@@ -471,7 +527,11 @@ object OpenAiCompatibleProtocolCodec {
         return LlmToolCall(id, aliases.toOriginalName(apiName), arguments.toString())
     }
 
-    private fun requireUsableResponse(content: String?, calls: List<LlmToolCall>): LlmProviderResponse {
+    private fun requireUsableResponse(
+        content: String?,
+        calls: List<LlmToolCall>,
+        usage: LlmTokenUsage? = null,
+    ): LlmProviderResponse {
         requireUniqueCallIds(calls)
         if (content == null && calls.isEmpty()) {
             throw LlmProtocolException(
@@ -479,8 +539,34 @@ object OpenAiCompatibleProtocolCodec {
                 "LLM response contains neither text nor tool calls",
             )
         }
-        return LlmProviderResponse(content = content, toolCalls = calls)
+        return LlmProviderResponse(content = content, toolCalls = calls, usage = usage)
     }
+
+    internal fun decodeUsage(usage: JSONObject?): LlmTokenUsage? {
+        if (usage == null) return null
+        val inputTokens = usage.optionalNonNegativeLong("prompt_tokens")
+        val outputTokens = usage.optionalNonNegativeLong("completion_tokens")
+        val totalTokens = usage.optionalNonNegativeLong("total_tokens")
+        if (inputTokens == null && outputTokens == null && totalTokens == null) return null
+        return LlmTokenUsage(inputTokens, outputTokens, totalTokens)
+    }
+
+    private fun decodeResponsesUsage(usage: JSONObject?): LlmTokenUsage? {
+        if (usage == null) return null
+        val inputTokens = usage.optionalNonNegativeLong("input_tokens")
+        val outputTokens = usage.optionalNonNegativeLong("output_tokens")
+        val totalTokens = usage.optionalNonNegativeLong("total_tokens")
+        if (inputTokens == null && outputTokens == null && totalTokens == null) return null
+        return LlmTokenUsage(inputTokens, outputTokens, totalTokens)
+    }
+
+    private fun isOfficialOpenAiEndpoint(baseUrl: String): Boolean = runCatching {
+        java.net.URI(baseUrl).host.equals("api.openai.com", ignoreCase = true)
+    }.getOrDefault(false)
+
+    private fun isGlmEndpoint(baseUrl: String): Boolean = runCatching {
+        java.net.URI(baseUrl).host.equals("open.bigmodel.cn", ignoreCase = true)
+    }.getOrDefault(false)
 
     private fun requireUniqueCallIds(calls: List<LlmToolCall>) {
         val ids = mutableSetOf<String>()
@@ -489,7 +575,7 @@ object OpenAiCompatibleProtocolCodec {
         }
     }
 
-    private fun remoteError(error: JSONObject): LlmProtocolException {
+    internal fun remoteError(error: JSONObject): LlmProtocolException {
         val remoteCode = error.optString("code").takeIf(String::isNotBlank)
         val message = error.optString("message").takeIf(String::isNotBlank)
             ?.let(::sanitizeRemoteMessage)
@@ -510,7 +596,183 @@ object OpenAiCompatibleProtocolCodec {
         .take(512)
 }
 
-private class ToolNameAliases(tools: List<LlmToolDefinition>) {
+internal class ChatCompletionsStreamDecoder(
+    request: LlmCompletionRequest,
+) {
+    private val aliases = ToolNameAliases(request.tools)
+    private val content = StringBuilder()
+    private val calls = sortedMapOf<Int, StreamingToolCall>()
+    private var usage: LlmTokenUsage? = null
+    private var sawChunk = false
+    private var finished = false
+
+    fun accept(data: String): LlmStreamEvent? {
+        check(!finished) { "LLM stream decoder is already finished" }
+        val root = try {
+            JSONObject(data)
+        } catch (error: JSONException) {
+            throw LlmProtocolException(
+                "LLM_INVALID_RESPONSE",
+                "LLM stream event is not valid JSON",
+                cause = error,
+            )
+        }
+        root.optJSONObject("error")?.let { throw OpenAiCompatibleProtocolCodec.remoteError(it) }
+        sawChunk = true
+        val eventUsage = OpenAiCompatibleProtocolCodec.decodeUsage(root.optJSONObject("usage"))
+        if (eventUsage != null) usage = eventUsage
+
+        val choices = root.optJSONArray("choices")
+        if (choices == null || choices.length() == 0) {
+            return eventUsage?.let { LlmStreamEvent(usage = it) }
+        }
+        val choice = choices.optJSONObject(0)
+            ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream choice must be an object")
+        validateFinishReason(choice.optString("finish_reason"))
+        val delta = choice.optJSONObject("delta")
+            ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream choice has no delta")
+        val contentDelta = decodeContentDelta(delta)
+        if (contentDelta != null) content.append(contentDelta)
+        decodeToolCallDeltas(delta.optJSONArray("tool_calls"))
+        return when {
+            contentDelta != null || eventUsage != null -> LlmStreamEvent(contentDelta, eventUsage)
+            else -> null
+        }
+    }
+
+    fun finish(): LlmProviderResponse {
+        check(!finished) { "LLM stream decoder is already finished" }
+        finished = true
+        if (!sawChunk) {
+            throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream did not contain any events")
+        }
+        val callIds = mutableSetOf<String>()
+        val decodedCalls = calls.values.map { call ->
+            if (call.id.isEmpty() || call.name.isEmpty()) {
+                throw LlmProtocolException("LLM_INVALID_RESPONSE", "Streamed tool call is incomplete")
+            }
+            if (!callIds.add(call.id.toString())) {
+                throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM returned duplicate tool call ids")
+            }
+            val arguments = try {
+                JSONObject(call.arguments.toString())
+            } catch (error: JSONException) {
+                throw LlmProtocolException(
+                    "LLM_INVALID_TOOL_ARGUMENTS",
+                    "LLM returned malformed streamed tool arguments",
+                    cause = error,
+                )
+            }
+            LlmToolCall(
+                id = call.id.toString(),
+                name = aliases.toOriginalName(call.name.toString()),
+                argumentsJson = arguments.toString(),
+            )
+        }
+        val decodedContent = content.toString().takeIf { it.isNotEmpty() }
+        if (decodedContent == null && decodedCalls.isEmpty()) {
+            throw LlmProtocolException(
+                "LLM_INVALID_RESPONSE",
+                "LLM response contains neither text nor tool calls",
+            )
+        }
+        return LlmProviderResponse(decodedContent, decodedCalls, usage)
+    }
+
+    private fun decodeContentDelta(delta: JSONObject): String? {
+        val value = when {
+            delta.has("content") && !delta.isNull("content") -> delta.opt("content")
+            delta.has("refusal") && !delta.isNull("refusal") -> delta.opt("refusal")
+            else -> return null
+        }
+        if (value !is String) {
+            throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream content delta must be text")
+        }
+        return value.takeIf { it.isNotEmpty() }
+    }
+
+    private fun decodeToolCallDeltas(rawCalls: JSONArray?) {
+        if (rawCalls == null) return
+        if (rawCalls.length() > MAX_TOOL_CALLS_PER_CHUNK) {
+            throw LlmProtocolException("LLM_INVALID_RESPONSE", "Too many streamed tool calls")
+        }
+        for (position in 0 until rawCalls.length()) {
+            val raw = rawCalls.optJSONObject(position)
+                ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "Streamed tool call must be an object")
+            val index = when (val value = raw.opt("index")) {
+                is Int -> value
+                is Long -> value.takeIf { it in 0 until MAX_TOOL_CALLS_PER_CHUNK.toLong() }?.toInt()
+                null -> position
+                else -> null
+            } ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "Streamed tool call index is invalid")
+            if (index !in 0 until MAX_TOOL_CALLS_PER_CHUNK) {
+                throw LlmProtocolException("LLM_INVALID_RESPONSE", "Streamed tool call index is out of range")
+            }
+            val accumulator = calls.getOrPut(index) { StreamingToolCall() }
+            raw.optString("id").takeIf(String::isNotEmpty)?.let { fragment ->
+                accumulator.id.appendFragment(fragment)
+            }
+            val function = raw.optJSONObject("function")
+            if (function != null) {
+                function.optString("name").takeIf(String::isNotEmpty)?.let { fragment ->
+                    accumulator.name.appendFragment(fragment)
+                }
+                if (function.has("arguments") && !function.isNull("arguments")) {
+                    val arguments = function.opt("arguments")
+                    if (arguments !is String) {
+                        throw LlmProtocolException(
+                            "LLM_INVALID_RESPONSE",
+                            "Streamed tool arguments must be text fragments",
+                        )
+                    }
+                    accumulator.arguments.append(arguments)
+                }
+            }
+        }
+    }
+
+    private fun validateFinishReason(reason: String) {
+        when (reason) {
+            "length" -> throw LlmProtocolException("LLM_OUTPUT_TRUNCATED", "LLM output reached its token limit")
+            "content_filter", "sensitive" -> throw LlmProtocolException(
+                "LLM_CONTENT_FILTERED",
+                "LLM output was blocked by content filtering",
+            )
+            "network_error" -> throw LlmProtocolException(
+                "LLM_REMOTE_NETWORK_ERROR",
+                "LLM service reported a network error",
+                retryable = true,
+            )
+        }
+    }
+
+    private class StreamingToolCall {
+        val id = StringBuilder()
+        val name = StringBuilder()
+        val arguments = StringBuilder()
+    }
+
+    private fun StringBuilder.appendFragment(fragment: String) {
+        // Most servers send fragments. Some repeat or send a cumulative value;
+        // tolerate both without duplicating id/name text.
+        val current = toString()
+        when {
+            current.isEmpty() -> append(fragment)
+            fragment == current -> Unit
+            fragment.startsWith(current) -> {
+                setLength(0)
+                append(fragment)
+            }
+            else -> append(fragment)
+        }
+    }
+
+    private companion object {
+        const val MAX_TOOL_CALLS_PER_CHUNK = 128
+    }
+}
+
+internal class ToolNameAliases(tools: List<LlmToolDefinition>) {
     private val originalToApi: Map<String, String>
     private val apiToOriginal: Map<String, String>
 
@@ -575,6 +837,21 @@ private fun JSONObject.optionalString(key: String): String? {
         throw LlmProtocolException("LLM_INVALID_REQUEST", "$key must be a string")
     }
     return getString(key)
+}
+
+private fun JSONObject.optionalNonNegativeLong(key: String): Long? {
+    if (!has(key) || isNull(key)) return null
+    val value = when (val raw = opt(key)) {
+        is Byte -> raw.toLong()
+        is Short -> raw.toLong()
+        is Int -> raw.toLong()
+        is Long -> raw
+        else -> throw LlmProtocolException("LLM_INVALID_RESPONSE", "$key must be an integer")
+    }
+    if (value < 0) {
+        throw LlmProtocolException("LLM_INVALID_RESPONSE", "$key must not be negative")
+    }
+    return value
 }
 
 private fun JSONObject.requireOnlyKeys(vararg allowedKeys: String) {

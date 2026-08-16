@@ -149,6 +149,15 @@ class PocketPilotDatabase(
         if (oldVersion < 4) {
             createPluginTables(db)
         }
+        // Version 1 did not have a messages table; the <2 branch above creates
+        // it with the latest shape, so only pre-existing v2-v4 tables need ALTERs.
+        if (oldVersion in 2..4) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN status TEXT")
+            db.execSQL("ALTER TABLE messages ADD COLUMN prompt_tokens INTEGER")
+            db.execSQL("ALTER TABLE messages ADD COLUMN completion_tokens INTEGER")
+            db.execSQL("ALTER TABLE messages ADD COLUMN total_tokens INTEGER")
+            db.execSQL("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+        }
         check(newVersion <= DATABASE_VERSION) {
             "Database version $newVersion is newer than supported version $DATABASE_VERSION"
         }
@@ -178,6 +187,11 @@ class PocketPilotDatabase(
                 created_at INTEGER NOT NULL,
                 run_id TEXT,
                 is_error INTEGER NOT NULL DEFAULT 0,
+                status TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                attachments_json TEXT NOT NULL DEFAULT '[]',
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
             """.trimIndent(),
@@ -225,6 +239,6 @@ class PocketPilotDatabase(
 
     companion object {
         private const val DATABASE_NAME = "pocketpilot.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
     }
 }

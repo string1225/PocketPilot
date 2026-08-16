@@ -1,13 +1,17 @@
 package com.string1225.pocketpilot.ui
 
+import android.net.Uri
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.string1225.pocketpilot.background.AgentRunCoordinator
 import com.string1225.pocketpilot.background.CoordinatedAgentRun
+import com.string1225.pocketpilot.background.PendingAgentTask
 import com.string1225.pocketpilot.model.AgentRunStatus
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.Checkpoint
+import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.Conversation
 import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
@@ -61,6 +65,8 @@ data class PocketPilotUiState(
     val checkpoints: List<Checkpoint> = emptyList(),
     val timeline: List<TimelineItem> = emptyList(),
     val agentInput: String = "",
+    val agentAttachments: List<ChatImageAttachment> = emptyList(),
+    val queuedAgentTaskCount: Int = 0,
     val agentStatus: AgentRunStatus = AgentRunStatus.IDLE,
     val pendingApproval: ToolApprovalRequest? = null,
     val notice: UiNotice? = null,
@@ -86,6 +92,7 @@ data class PocketPilotUiState(
 class PocketPilotViewModel(
     private val service: PocketPilotService,
     private val coordinator: AgentRunCoordinator,
+    private val attachmentImporter: ChatImageAttachmentImporter,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(
         PocketPilotUiState(
@@ -106,15 +113,19 @@ class PocketPilotViewModel(
     private var pendingConversationTarget: ConversationTarget? = null
     private val observedTerminalRunIds = mutableSetOf<String>()
     private val settingsMutex = Mutex()
+    private var draftGeneration = 0L
 
     init {
         viewModelScope.launch {
-            combine(coordinator.runs, coordinator.pendingApprovals) { runs, approvals ->
-                runs to approvals
-            }.collect { (runs, approvals) ->
-                syncCoordinatorState(runs, approvals)
-                if (initialized) handleNewTerminalRuns(runs.values)
-            }
+            combine(
+                coordinator.runs,
+                coordinator.pendingApprovals,
+                coordinator.pendingTasks,
+            ) { runs, approvals, pendingTasks -> Triple(runs, approvals, pendingTasks) }
+                .collect { (runs, approvals, pendingTasks) ->
+                    syncCoordinatorState(runs, approvals, pendingTasks)
+                    if (initialized) handleNewTerminalRuns(runs.values)
+                }
         }
         viewModelScope.launch { initialize() }
     }
@@ -165,7 +176,11 @@ class PocketPilotViewModel(
                 )
             }
             initialized = true
-            syncCoordinatorState(coordinator.runs.value, coordinator.pendingApprovals.value)
+            syncCoordinatorState(
+                coordinator.runs.value,
+                coordinator.pendingApprovals.value,
+                coordinator.pendingTasks.value,
+            )
             handleNewTerminalRuns(coordinator.runs.value.values)
             succeeded = true
         }
@@ -219,6 +234,7 @@ class PocketPilotViewModel(
                 val settings = mutableState.value.settings
                 val result = withContext(Dispatchers.IO) {
                     service.deleteProject(projectId)
+                    attachmentImporter.deleteProject(projectId)
                     val projects = service.listProjects()
                     var conversations = service.listConversations()
                     val conversation = conversations.firstOrNull()
@@ -305,7 +321,17 @@ class PocketPilotViewModel(
             runOperation {
                 val snapshot = mutableState.value
                 val result = withContext(Dispatchers.IO) {
+                    val removedAttachmentIds = service.listMessages(conversationId)
+                        .flatMap { it.attachments }
+                        .mapTo(mutableSetOf()) { it.id }
                     service.deleteConversation(conversationId)
+                    val stillReferencedIds = service.listConversations(conversation.projectId)
+                        .flatMap { remaining -> service.listMessages(remaining.id) }
+                        .flatMap { it.attachments }
+                        .mapTo(mutableSetOf()) { it.id }
+                    (removedAttachmentIds - stillReferencedIds).forEach { attachmentId ->
+                        attachmentImporter.delete(conversation.projectId, attachmentId)
+                    }
                     var conversations = service.listConversations()
                     val project = snapshot.selectedProject ?: service.listProjects().first()
                     val conversation = conversations.firstOrNull { it.projectId == project.id }
@@ -397,6 +423,8 @@ class PocketPilotViewModel(
         contentLoadJob?.cancel()
         fileLoadJob?.cancel()
         requestedFile = null
+        discardDraftAttachments(mutableState.value.agentAttachments)
+        draftGeneration += 1
         mutableState.update {
             it.copy(
                 loading = true,
@@ -412,9 +440,15 @@ class PocketPilotViewModel(
                 timeline = emptyList(),
                 agentStatus = AgentRunStatus.IDLE,
                 pendingApproval = null,
+                agentInput = "",
+                agentAttachments = emptyList(),
             )
         }
-        syncCoordinatorState(coordinator.runs.value, coordinator.pendingApprovals.value)
+        syncCoordinatorState(
+            coordinator.runs.value,
+            coordinator.pendingApprovals.value,
+            coordinator.pendingTasks.value,
+        )
         contentLoadJob = viewModelScope.launch {
             loadSelectionContent(selection.project.id, selection.conversation.id)
         }
@@ -440,7 +474,10 @@ class PocketPilotViewModel(
                         checkpoints = content.checkpoints,
                         timeline = mergeTimeline(
                             content.timeline,
-                            coordinatorTimeline(conversationId, coordinator.runs.value.values),
+                            coordinatorTimeline(conversationId, coordinator.runs.value.values) +
+                                coordinator.pendingTasks.value
+                                    .filter { it.conversationId == conversationId }
+                                    .map { it.userItem },
                         ),
                     )
                 } else {
@@ -576,13 +613,99 @@ class PocketPilotViewModel(
         mutableState.update { it.copy(agentInput = value) }
     }
 
+    fun importAgentImages(uris: List<Uri>) {
+        val snapshot = mutableState.value
+        val projectId = snapshot.selectedProjectId ?: return
+        val conversationId = snapshot.selectedConversationId ?: return
+        val importGeneration = draftGeneration
+        val availableSlots = MAX_CHAT_ATTACHMENTS - snapshot.agentAttachments.size
+        if (availableSlots <= 0) {
+            postNotice(
+                localized(
+                    "每条消息最多添加 $MAX_CHAT_ATTACHMENTS 张图片",
+                    "Attach up to $MAX_CHAT_ATTACHMENTS images",
+                ),
+                isError = true,
+            )
+            return
+        }
+        val selected = uris.distinct().take(availableSlots)
+        viewModelScope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                selected.map { uri -> runCatching { attachmentImporter.import(projectId, uri) } }
+            }
+            val imported = outcomes.mapNotNull { it.getOrNull() }
+            if (
+                mutableState.value.selectedProjectId == projectId &&
+                mutableState.value.selectedConversationId == conversationId &&
+                draftGeneration == importGeneration
+            ) {
+                var retainedIds = emptySet<String>()
+                mutableState.update { current ->
+                    val remaining = (MAX_CHAT_ATTACHMENTS - current.agentAttachments.size).coerceAtLeast(0)
+                    val retained = imported.take(remaining)
+                    retainedIds = retained.mapTo(mutableSetOf()) { it.id }
+                    current.copy(agentAttachments = current.agentAttachments + retained)
+                }
+                val discarded = imported.filterNot { it.id in retainedIds }
+                if (discarded.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        discarded.forEach { runCatching { attachmentImporter.delete(projectId, it.id) } }
+                    }
+                }
+            } else {
+                withContext(Dispatchers.IO) {
+                    imported.forEach { runCatching { attachmentImporter.delete(projectId, it.id) } }
+                }
+            }
+            val failed = outcomes.count { it.isFailure }
+            if (failed > 0) {
+                postNotice(
+                    localized(
+                        "有 $failed 张图片无法导入，请使用 JPEG、PNG 或 WebP（单张不超过 8 MiB）",
+                        "$failed image(s) could not be imported. Use JPEG, PNG, or WebP up to 8 MiB",
+                    ),
+                    isError = true,
+                )
+            }
+            if (uris.distinct().size > availableSlots) {
+                postNotice(
+                    localized(
+                        "每条消息最多添加 $MAX_CHAT_ATTACHMENTS 张图片",
+                        "Attach up to $MAX_CHAT_ATTACHMENTS images",
+                    ),
+                    isError = true,
+                )
+            }
+        }
+    }
+
+    fun removeAgentAttachment(attachmentId: String) {
+        var removed: ChatImageAttachment? = null
+        mutableState.update { current ->
+            removed = current.agentAttachments.firstOrNull { it.id == attachmentId }
+            if (removed == null) {
+                current
+            } else {
+                current.copy(
+                    agentAttachments = current.agentAttachments.filterNot { it.id == attachmentId },
+                )
+            }
+        }
+        val attachment = removed ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { attachmentImporter.delete(attachment.projectId, attachment.id) }
+        }
+    }
+
     fun sendAgentTask() {
         val snapshot = mutableState.value
         val projectId = snapshot.selectedProjectId ?: return
         val conversationId = snapshot.selectedConversationId ?: return
-        val task = snapshot.agentInput.trim()
-        if (task.isEmpty()) return
-        if (!ensureProjectIsIdle(projectId)) return
+        val task = snapshot.agentInput.trim().ifEmpty {
+            if (snapshot.agentAttachments.isEmpty()) return
+            localized("请分析我附上的图片", "Please analyze the attached images")
+        }
         if (snapshot.editorDirty) {
             postNotice(
                 localized(
@@ -596,13 +719,23 @@ class PocketPilotViewModel(
 
         val firstUserMessage = snapshot.timeline.none { it.kind == TimelineItemKind.USER }
         try {
-            coordinator.start(projectId, conversationId, task)
+            coordinator.enqueueOrStart(
+                projectId = projectId,
+                conversationId = conversationId,
+                task = task,
+                attachments = snapshot.agentAttachments,
+            )
         } catch (error: Throwable) {
             postNotice(error.displayMessage(), isError = true)
             return
         }
-        mutableState.update { it.copy(agentInput = "") }
-        syncCoordinatorState(coordinator.runs.value, coordinator.pendingApprovals.value)
+        draftGeneration += 1
+        mutableState.update { it.copy(agentInput = "", agentAttachments = emptyList()) }
+        syncCoordinatorState(
+            coordinator.runs.value,
+            coordinator.pendingApprovals.value,
+            coordinator.pendingTasks.value,
+        )
 
         if (firstUserMessage) {
             viewModelScope.launch {
@@ -681,7 +814,12 @@ class PocketPilotViewModel(
                 } finally {
                     secret?.fill('\u0000')
                 }
-                postNotice(localized("模型连接已安全保存", "Model connection saved securely"))
+                postNotice(
+                    localized(
+                        "文本与图片模型连接测试通过，配置已安全保存",
+                        "Text and image model tests passed; the connection was saved securely",
+                    ),
+                )
             }
         }
     }
@@ -800,12 +938,14 @@ class PocketPilotViewModel(
     private fun syncCoordinatorState(
         runs: Map<String, CoordinatedAgentRun>,
         approvals: List<ToolApprovalRequest>,
+        pendingTasks: List<PendingAgentTask>,
     ) {
         mutableState.update { current ->
             val conversationId = current.selectedConversationId
                 ?: return@update current.copy(
                     agentStatus = AgentRunStatus.IDLE,
                     pendingApproval = null,
+                    queuedAgentTaskCount = 0,
                 )
             val conversationRuns = runs.values
                 .filter { it.conversationId == conversationId }
@@ -818,14 +958,19 @@ class PocketPilotViewModel(
                 .filterNot { it.status.isTerminal }
                 .mapTo(mutableSetOf()) { it.runId }
             val approval = approvals.firstOrNull { it.runId in activeRunIds }
+            val conversationPending = pendingTasks.filter { it.conversationId == conversationId }
             current.copy(
-                timeline = mergeTimeline(current.timeline, conversationRuns.flatMap { it.timeline }),
+                timeline = mergeTimeline(
+                    current.timeline,
+                    conversationRuns.flatMap { it.timeline } + conversationPending.map { it.userItem },
+                ),
                 agentStatus = when {
                     approval != null -> AgentRunStatus.WAITING_FOR_APPROVAL
                     latestRun != null -> latestRun.status
                     else -> AgentRunStatus.IDLE
                 },
                 pendingApproval = approval,
+                queuedAgentTaskCount = conversationPending.size,
             )
         }
     }
@@ -962,13 +1107,16 @@ class PocketPilotViewModel(
     }
 
     private fun ensureProjectIsIdle(projectId: String): Boolean {
-        if (!coordinator.hasActiveProjectRun(projectId)) return true
+        if (!coordinator.hasActiveProjectRun(projectId) && !coordinator.hasQueuedProjectTasks(projectId)) return true
         postBusyNotice()
         return false
     }
 
     private fun ensureNoActiveRunsForPluginChange(): Boolean {
-        if (coordinator.runs.value.values.none { !it.status.isTerminal }) return true
+        if (
+            coordinator.runs.value.values.none { !it.status.isTerminal } &&
+            coordinator.pendingTasks.value.isEmpty()
+        ) return true
         postNotice(
             localized(
                 "请先停止所有 Agent Run，再修改全局插件状态",
@@ -996,17 +1144,27 @@ class PocketPilotViewModel(
         mutableState.update { it.copy(notice = UiNotice(noticeId, message, isError)) }
     }
 
+    private fun discardDraftAttachments(attachments: List<ChatImageAttachment>) {
+        if (attachments.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            attachments.forEach { attachment ->
+                runCatching { attachmentImporter.delete(attachment.projectId, attachment.id) }
+            }
+        }
+    }
+
     private fun localized(chinese: String, english: String): String =
         if (mutableState.value.settings.language == AppLanguage.ENGLISH) english else chinese
 
     class Factory(
         private val service: PocketPilotService,
         private val coordinator: AgentRunCoordinator,
+        private val attachmentImporter: ChatImageAttachmentImporter,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(PocketPilotViewModel::class.java))
-            return PocketPilotViewModel(service, coordinator) as T
+            return PocketPilotViewModel(service, coordinator, attachmentImporter) as T
         }
     }
 }
@@ -1056,6 +1214,8 @@ private fun PocketPilotSettings.copyLlmConnectionFrom(
     llmBaseUrl = source.llmBaseUrl,
     openAiModelName = source.openAiModelName,
     openAiBaseUrl = source.openAiBaseUrl,
+    imageModelName = source.imageModelName,
+    openAiImageModelName = source.openAiImageModelName,
 )
 
 private fun defaultConversationTitle(language: AppLanguage): String =
@@ -1077,6 +1237,9 @@ private fun ConversationMessage.toTimelineItem(): TimelineItem = TimelineItem(
     body = content,
     createdAt = createdAt,
     isError = isError,
+    status = status,
+    tokenUsage = tokenUsage,
+    attachments = attachments,
 )
 
 private fun coordinatorTimeline(
@@ -1093,7 +1256,7 @@ private fun mergeTimeline(
 ): List<TimelineItem> {
     val itemsById = LinkedHashMap<String, TimelineItem>(history.size + coordinated.size)
     history.forEach { itemsById.putIfAbsent(it.id, it) }
-    coordinated.forEach { itemsById.putIfAbsent(it.id, it) }
+    coordinated.forEach { itemsById[it.id] = it }
     return itemsById.values.sortedBy { it.createdAt }
 }
 
@@ -1103,3 +1266,5 @@ private val AgentRunStatus.isTerminal: Boolean
         this == AgentRunStatus.CANCELLED
 
 private fun Throwable.displayMessage(): String = message?.takeIf { it.isNotBlank() } ?: "发生未知错误"
+
+private const val MAX_CHAT_ATTACHMENTS = 6

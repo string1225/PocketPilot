@@ -152,7 +152,23 @@ class PluginRepositoryTest {
         context.deleteDatabase(databaseName)
         val path = context.getDatabasePath(databaseName)
         path.parentFile?.mkdirs()
-        SQLiteDatabase.openOrCreateDatabase(path, null).use { legacy -> legacy.version = 3 }
+        SQLiteDatabase.openOrCreateDatabase(path, null).use { legacy ->
+            legacy.execSQL(
+                """
+                CREATE TABLE messages (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    run_id TEXT,
+                    is_error INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent(),
+            )
+            legacy.version = 3
+        }
 
         database = PocketPilotDatabase(context, databaseName)
         val tables = database.readableDatabase.rawQuery(
@@ -161,7 +177,7 @@ class PluginRepositoryTest {
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
 
         assertEquals(listOf("plugins"), tables)
-        assertEquals(4, database.readableDatabase.version)
+        assertEquals(5, database.readableDatabase.version)
     }
 
     private fun bundle(

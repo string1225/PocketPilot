@@ -13,9 +13,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.string1225.pocketpilot.ui.PocketPilotApp
 import com.string1225.pocketpilot.ui.PocketPilotViewModel
+import com.string1225.pocketpilot.ui.ChatImageAttachmentImporter
+import com.string1225.pocketpilot.ui.SpeechInputController
+import com.string1225.pocketpilot.ui.SpeechInputControllerFactory
 
 class MainActivity : ComponentActivity() {
     private lateinit var pocketPilotViewModel: PocketPilotViewModel
+    private lateinit var speechInputController: SpeechInputController
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -32,14 +36,29 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         val application = application as PocketPilotApplication
+        speechInputController = SpeechInputControllerFactory.create(this)
         pocketPilotViewModel = ViewModelProvider(
             this,
-            PocketPilotViewModel.Factory(application.service, application.agentRunCoordinator),
+            PocketPilotViewModel.Factory(
+                application.service,
+                application.agentRunCoordinator,
+                ChatImageAttachmentImporter(this, application.attachmentImageStore),
+            ),
         )[PocketPilotViewModel::class.java]
         handleOpenConversationIntent(intent)
         setContent {
-            PocketPilotApp(pocketPilotViewModel)
+            PocketPilotApp(pocketPilotViewModel, speechInputController)
         }
+    }
+
+    override fun onDestroy() {
+        if (::speechInputController.isInitialized) speechInputController.close()
+        super.onDestroy()
+    }
+
+    override fun onStop() {
+        if (::speechInputController.isInitialized) speechInputController.stop()
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {

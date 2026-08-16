@@ -12,6 +12,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +42,58 @@ class OpenAiCompatibleLlmClientSecretEchoTest {
         )
     }
 
+    @Test
+    fun streamsSafeTextAndReturnsFinalUsage() {
+        val events = mutableListOf<LlmStreamEvent>()
+        val client = streamingClient(
+            sse(
+                """{"choices":[{"delta":{"content":"PocketPilot streams a sufficiently long answer. "},"finish_reason":null}]}""",
+                """{"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":9,"total_tokens":16}}""",
+            ),
+        )
+
+        val response = client.complete(streamingRequest(), events::add)
+
+        assertEquals("PocketPilot streams a sufficiently long answer. Done.", response.content)
+        assertEquals(LlmTokenUsage(7, 9, 16), response.usage)
+        assertEquals(response.content, events.mapNotNull(LlmStreamEvent::contentDelta).joinToString(""))
+        assertNotNull(events.lastOrNull { it.usage != null })
+    }
+
+    @Test
+    fun blocksCredentialEchoInOneSseChunkBeforeItCrossesBridge() {
+        val events = mutableListOf<LlmStreamEvent>()
+        val error = assertThrows(LlmProtocolException::class.java) {
+            streamingClient(
+                sse(
+                    """{"choices":[{"delta":{"content":"prefix $secret suffix"},"finish_reason":"stop"}]}""",
+                ),
+            ).complete(streamingRequest(), events::add)
+        }
+
+        assertEquals("LLM_SECRET_ECHO", error.code)
+        assertFalse(events.mapNotNull(LlmStreamEvent::contentDelta).joinToString("").contains(secret))
+    }
+
+    @Test
+    fun blocksCredentialEchoSplitAcrossSseChunksBeforeItCrossesBridge() {
+        val split = secret.length / 2
+        val events = mutableListOf<LlmStreamEvent>()
+        val error = assertThrows(LlmProtocolException::class.java) {
+            streamingClient(
+                sse(
+                    """{"choices":[{"delta":{"content":"harmless preface ${secret.take(split)}"},"finish_reason":null}]}""",
+                    """{"choices":[{"delta":{"content":"${secret.drop(split)} tail"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}""",
+                ),
+            ).complete(streamingRequest(), events::add)
+        }
+
+        assertEquals("LLM_SECRET_ECHO", error.code)
+        val emitted = events.mapNotNull(LlmStreamEvent::contentDelta).joinToString("")
+        assertFalse(emitted.contains(secret))
+        assertFalse(emitted.contains(secret.take(split)))
+    }
+
     private fun assertBlocked(responseJson: String, tools: List<LlmToolDefinition> = emptyList()) {
         val client = OpenAiCompatibleLlmClient(
             credentials = FixedCredentialStore(secret),
@@ -59,6 +112,23 @@ class OpenAiCompatibleLlmClientSecretEchoTest {
         assertEquals("LLM_SECRET_ECHO", error.code)
         assertFalse(error.message.contains(secret))
         assertFalse(error.cause?.message.orEmpty().contains(secret))
+    }
+
+    private fun streamingClient(response: String): OpenAiCompatibleLlmClient = OpenAiCompatibleLlmClient(
+        credentials = FixedCredentialStore(secret),
+        connectionFactory = LlmHttpConnectionFactory { url -> FakeSuccessConnection(url, response) },
+    )
+
+    private fun streamingRequest(): LlmCompletionRequest = LlmCompletionRequest(
+        config = LlmEndpointConfig(credentialId = CredentialIds.DEFAULT_LLM),
+        messages = listOf(LlmMessage("user", "test")),
+        tools = emptyList(),
+        stream = true,
+    )
+
+    private fun sse(vararg events: String): String = buildString {
+        events.forEach { append("data: ").append(it).append("\n\n") }
+        append("data: [DONE]\n\n")
     }
 
     private class FixedCredentialStore(private val value: String) : SecureCredentialStore {

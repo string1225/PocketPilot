@@ -1,6 +1,6 @@
 package com.string1225.pocketpilot.llm
 
-const val DEFAULT_LLM_MODEL: String = "glm-5.2"
+const val DEFAULT_LLM_MODEL: String = "glm-5.3"
 const val DEFAULT_CHAT_COMPLETIONS_BASE_URL: String = "https://open.bigmodel.cn/api/coding/paas/v4"
 const val DEFAULT_RESPONSES_BASE_URL: String = "https://open.bigmodel.cn/api/v1"
 
@@ -60,11 +60,34 @@ data class LlmCompletionRequest(
     val config: LlmEndpointConfig,
     val messages: List<LlmMessage>,
     val tools: List<LlmToolDefinition>,
+    /** Chat Completions only; Responses remains on its existing JSON path. */
+    val stream: Boolean = false,
+)
+
+data class LlmTokenUsage(
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val totalTokens: Long? = null,
+) {
+    init {
+        require(inputTokens != null || outputTokens != null || totalTokens != null) {
+            "Token usage must contain at least one value"
+        }
+        require(listOfNotNull(inputTokens, outputTokens, totalTokens).all { it >= 0 }) {
+            "Token usage values must not be negative"
+        }
+    }
+}
+
+data class LlmStreamEvent(
+    val contentDelta: String? = null,
+    val usage: LlmTokenUsage? = null,
 )
 
 data class LlmProviderResponse(
     val content: String? = null,
     val toolCalls: List<LlmToolCall> = emptyList(),
+    val usage: LlmTokenUsage? = null,
 )
 
 class LlmProtocolException(

@@ -141,6 +141,111 @@ describe("native LLM transport", () => {
     expect(error).toBeInstanceOf(NativeLlmTransportError);
     expect(error).toMatchObject({ code: "LLM_RATE_LIMITED", retryable: true });
   });
+
+  it("forwards bounded native progress and final token usage", async () => {
+    const streamEvents: unknown[] = [];
+    let rpc: NativeRpcClient;
+    rpc = new NativeRpcClient({
+      postMessage: (json) => {
+        const envelope = JSON.parse(json) as ToolRequestEnvelope;
+        queueMicrotask(() => {
+          rpc.receive(JSON.stringify({
+            version: 1,
+            id: envelope.id,
+            type: "tool.progress",
+            runId: envelope.runId,
+            projectId: envelope.projectId,
+            payload: { contentDelta: "Pocket" }
+          }));
+          rpc.receive(JSON.stringify({
+            version: 1,
+            id: envelope.id,
+            type: "tool.progress",
+            runId: envelope.runId,
+            projectId: envelope.projectId,
+            payload: {
+              contentDelta: "Pilot",
+              usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 }
+            }
+          }));
+          rpc.receive(JSON.stringify({
+            version: 1,
+            id: envelope.id,
+            type: "tool.result",
+            runId: envelope.runId,
+            projectId: envelope.projectId,
+            payload: toolSuccess({
+              content: "PocketPilot",
+              usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 }
+            })
+          }));
+        });
+      }
+    });
+
+    const result = await new NativeRpcLlmTransport(rpc).complete(
+      {
+        protocol: "chat_completions",
+        baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+        model: DEFAULT_LLM_MODEL,
+        credentialId: "credential-1"
+      },
+      {
+        ...providerRequest(),
+        onStreamEvent: (event) => streamEvents.push(event)
+      },
+    );
+
+    expect(streamEvents).toEqual([
+      { contentDelta: "Pocket" },
+      {
+        contentDelta: "Pilot",
+        usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 }
+      }
+    ]);
+    expect(result).toEqual({
+      content: "PocketPilot",
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 }
+    });
+  });
+
+  it("ignores progress after cancellation removes the pending RPC", async () => {
+    const controller = new AbortController();
+    const progress: unknown[] = [];
+    let envelope: ToolRequestEnvelope | undefined;
+    const rpc = new NativeRpcClient({
+      postMessage: (json) => {
+        envelope = JSON.parse(json) as ToolRequestEnvelope;
+      }
+    });
+    const completion = new NativeRpcLlmTransport(rpc)
+      .complete(
+        {
+          protocol: "chat_completions",
+          baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
+          model: DEFAULT_LLM_MODEL,
+          credentialId: "credential-1"
+        },
+        {
+          ...providerRequest(controller.signal),
+          onStreamEvent: (event) => progress.push(event)
+        },
+      )
+      .catch((error: unknown) => error);
+
+    controller.abort();
+    rpc.receive(JSON.stringify({
+      version: 1,
+      id: envelope?.id,
+      type: "tool.progress",
+      runId: envelope?.runId,
+      projectId: envelope?.projectId,
+      payload: { contentDelta: "late" }
+    }));
+
+    await expect(completion).resolves.toMatchObject({ code: "CANCELLED" });
+    expect(progress).toEqual([]);
+  });
 });
 
 describe("runtime LLM provider selection", () => {
@@ -235,6 +340,75 @@ describe("runtime LLM provider selection", () => {
       baseUrl: DEFAULT_CHAT_COMPLETIONS_BASE_URL,
       model: DEFAULT_LLM_MODEL,
       credentialId: "credential-1"
+    });
+  });
+
+  it("orders bridge progress before the stable final assistant event", async () => {
+    const runtimeEvents: Array<Record<string, unknown>> = [];
+    let runtime: AndroidAgentRuntime;
+    runtime = new AndroidAgentRuntime({
+      postMessage: (json) => {
+        const envelope = JSON.parse(json) as Record<string, unknown>;
+        if (envelope.type === "event") {
+          runtimeEvents.push(envelope.payload as Record<string, unknown>);
+          return;
+        }
+        const requestEnvelope = envelope as unknown as ToolRequestEnvelope;
+        if (requestEnvelope.payload.name !== "llm.complete") return;
+        queueMicrotask(() => {
+          for (const contentDelta of ["Pocket", "Pilot"]) {
+            runtime.receive(JSON.stringify({
+              version: 1,
+              id: requestEnvelope.id,
+              type: "tool.progress",
+              runId: requestEnvelope.runId,
+              projectId: requestEnvelope.projectId,
+              payload: { contentDelta }
+            }));
+          }
+          runtime.receive(JSON.stringify({
+            version: 1,
+            id: requestEnvelope.id,
+            type: "tool.result",
+            runId: requestEnvelope.runId,
+            projectId: requestEnvelope.projectId,
+            payload: toolSuccess({
+              content: "PocketPilot",
+              usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }
+            })
+          }));
+        });
+      }
+    });
+
+    await runtime.start(JSON.stringify({
+      runId: "run-stream-order",
+      projectId: "project-1",
+      task: "hello",
+      provider: {
+        type: "openai_compatible",
+        credentialId: "credential-1"
+      }
+    }));
+
+    expect(runtimeEvents.map((event) => event.type)).toEqual([
+      "run.started",
+      "assistant.delta",
+      "assistant.delta",
+      "assistant.message",
+      "run.completed"
+    ]);
+    expect(runtimeEvents.slice(1, 4).map((event) => event.messageId)).toEqual([
+      "run-stream-order:assistant:1",
+      "run-stream-order:assistant:1",
+      "run-stream-order:assistant:1"
+    ]);
+    expect(runtimeEvents[1]).toMatchObject({ delta: "Pocket", content: "Pocket" });
+    expect(runtimeEvents[2]).toMatchObject({ delta: "Pilot", content: "PocketPilot" });
+    expect(runtimeEvents[3]).toMatchObject({
+      content: "PocketPilot",
+      status: "completed",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }
     });
   });
 });

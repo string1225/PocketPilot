@@ -136,6 +136,9 @@ adb devices -l
 4. 点左上角 PocketPilot 图标，依次验证：模型、远程服务器、个性化、记忆、工具、插件、外观、语言。
 5. 切换“跟随系统/亮色/暗色”和“中文/English”，返回后立即生效；强制停止并重启，设置仍保留。
 6. 在不同项目和会话之间切换，确认消息与文件不会串项目。
+7. 点击话筒并按提示授予麦克风权限；确认中文/English 识别结果逐步写入输入框，点击输入框、切会话或切到后台后识别立即停止。
+8. 选择一到多张 JPEG/PNG/WebP 图片，确认输入区出现缩略图；发送后图片仍显示在用户消息中，模型只能通过 `image.analyze` 的附件 ID 读取。
+9. 在一个任务运行中保持输入框为空时确认主按钮为“终止”；输入新消息后按钮变回“发送”，点击后显示已排队，并在当前任务结束后按 FIFO 自动发送。
 
 离线模式可发送：
 
@@ -152,11 +155,11 @@ adb devices -l
 ## 7. 真实 LLM 测试
 
 1. 左上角设置 > 模型。
-2. 模型协议默认应选中“OpenAI Chat API”；Endpoint、模型编码和 API Key（AK）输入框均显示且为空时不能保存。填写专用测试用 OpenAI-compatible HTTPS Endpoint、模型编码与 AK 后保存。
-3. 发送“列出当前项目文件”；确认出现真实 assistant 消息和 `workspace.list` Tool 轨迹。在同一会话继续追问，验证多轮历史。
+2. 模型协议默认应选中“OpenAI Chat API”；Endpoint、文本模型、图片模型和 API Key（AK）输入框均显示且为空时不能保存。填写专用测试连接后点击“保存并测试”，文本和 1x1 测试图片都成功才可保存。
+3. 发送“列出当前项目文件”；确认只显示用户与 Assistant 消息，不显示 `run.started`、`run.completed` 或 Tool/Status 卡片。在同一会话继续追问，验证多轮历史。
 4. 返回设置，把模型协议切换为“GLM”；Endpoint 输入框应隐藏，实际请求固定使用：
    `https://open.bigmodel.cn/api/coding/paas/v4`
-5. GLM 模型编码应默认为 `glm-5.2`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 保存并再次验证 assistant 消息、Tool calling 与多轮历史。
+5. GLM 文本模型应默认为 `glm-5.3`、图片模型固定为 `glm-5v-turbo`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 执行“保存并测试”，再验证 SSE 打字机效果、图片识别、Tool calling 与多轮历史。
 6. 切回 OpenAI Chat API，确认 Endpoint 输入框重新显示且必填。设置 UI 不应再显示 Responses 协议选项；Responses 仅保留为后端兼容能力。
 7. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
 

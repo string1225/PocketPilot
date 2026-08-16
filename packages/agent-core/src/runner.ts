@@ -12,6 +12,7 @@ import type {
   AgentRunInput,
   AgentRunResult,
   AgentRunner,
+  ProviderTokenUsage,
   ProviderToolCall
 } from "./types.js";
 
@@ -38,6 +39,23 @@ const isAbortError = (error: unknown): boolean =>
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const addUsage = (
+  aggregate: ProviderTokenUsage | undefined,
+  next: ProviderTokenUsage | undefined,
+): ProviderTokenUsage | undefined => {
+  if (next === undefined) return aggregate;
+  const sum = (left: number | undefined, right: number | undefined): number | undefined =>
+    left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
+  const inputTokens = sum(aggregate?.inputTokens, next.inputTokens);
+  const outputTokens = sum(aggregate?.outputTokens, next.outputTokens);
+  const totalTokens = sum(aggregate?.totalTokens, next.totalTokens);
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens })
+  };
+};
 
 const toToolContent = (result: ToolResult<unknown>): string => {
   try {
@@ -134,12 +152,24 @@ export class DefaultAgentRunner implements AgentRunner {
     }
 
     const seenCallIds = new Set<string>();
+    let runUsage: ProviderTokenUsage | undefined;
     for (let step = 1; step <= this.#maxSteps; step += 1) {
       if (signal.aborted) {
         return cancelled(step - 1);
       }
 
       let response;
+      const messageId = `${input.runId}:assistant:${step}`;
+      let streamedContent = "";
+      const finalizePartialStream = (status: "failed" | "cancelled"): void => {
+        if (streamedContent.length === 0) return;
+        emit({
+          type: "assistant.message",
+          messageId,
+          content: streamedContent,
+          status
+        });
+      };
       try {
         response = await this.#provider.complete({
           runId: input.runId,
@@ -147,12 +177,26 @@ export class DefaultAgentRunner implements AgentRunner {
           step,
           messages: [...messages],
           tools: this.#tools.list(),
-          signal
+          signal,
+          onStreamEvent: (streamEvent) => {
+            if (signal.aborted) return;
+            const delta = streamEvent.contentDelta;
+            if (delta === undefined || delta.length === 0) return;
+            streamedContent += delta;
+            emit({
+              type: "assistant.delta",
+              messageId,
+              delta,
+              content: streamedContent
+            });
+          }
         });
       } catch (error) {
         if (signal.aborted || isAbortError(error)) {
+          finalizePartialStream("cancelled");
           return cancelled(step);
         }
+        finalizePartialStream("failed");
         return failed(step, {
           code: "PROVIDER_FAILED",
           message: `${this.#provider.name}: ${errorMessage(error)}`,
@@ -161,13 +205,22 @@ export class DefaultAgentRunner implements AgentRunner {
       }
 
       if (signal.aborted) {
+        finalizePartialStream("cancelled");
         return cancelled(step);
       }
 
       const toolCalls = response.toolCalls ?? [];
       const content = response.content ?? "";
+      runUsage = addUsage(runUsage, response.usage);
       if (content.length > 0) {
-        emit({ type: "assistant.message", content });
+        const messageUsage = toolCalls.length === 0 ? runUsage : response.usage;
+        emit({
+          type: "assistant.message",
+          messageId,
+          content,
+          status: "completed",
+          ...(messageUsage === undefined ? {} : { usage: messageUsage })
+        });
       }
 
       if (toolCalls.length === 0) {
@@ -178,7 +231,12 @@ export class DefaultAgentRunner implements AgentRunner {
           });
         }
         messages.push({ role: "assistant", content });
-        emit({ type: "run.completed", output: content, steps: step });
+        emit({
+          type: "run.completed",
+          output: content,
+          steps: step,
+          ...(runUsage === undefined ? {} : { usage: runUsage })
+        });
         return { ...base(step), status: "completed", output: content };
       }
 

@@ -47,9 +47,11 @@ class SettingsRepository(
             put(KEY_LLM_PROTOCOL, LlmProtocolPreference.CHAT_COMPLETIONS.value)
             put(KEY_MODEL_NAME, activeModel)
             put(KEY_LLM_BASE_URL, activeBaseUrl)
+            put(KEY_IMAGE_MODEL, provider.defaultImageModel)
             if (provider == LlmProviderPreference.OPENAI_CHAT) {
                 put(KEY_OPENAI_MODEL, activeModel)
                 put(KEY_OPENAI_BASE_URL, activeBaseUrl)
+                put(KEY_OPENAI_IMAGE_MODEL, "")
             }
         }
         val db = database.writableDatabase
@@ -73,6 +75,8 @@ class SettingsRepository(
             persistedBaseUrl = persistedBaseUrl,
             persistedOpenAiModel = get(KEY_OPENAI_MODEL),
             persistedOpenAiBaseUrl = get(KEY_OPENAI_BASE_URL),
+            persistedImageModel = get(KEY_IMAGE_MODEL),
+            persistedOpenAiImageModel = get(KEY_OPENAI_IMAGE_MODEL),
         )
         val protocol = LlmProtocolPreference.fromValue(get(KEY_LLM_PROTOCOL).orEmpty())
         return PocketPilotSettings(
@@ -82,6 +86,8 @@ class SettingsRepository(
             llmBaseUrl = connection.baseUrl,
             openAiModelName = connection.openAiModelName,
             openAiBaseUrl = connection.openAiBaseUrl,
+            imageModelName = connection.imageModelName,
+            openAiImageModelName = connection.openAiImageModelName,
             remoteServer = get(KEY_REMOTE_SERVER).orEmpty(),
             personalization = get(KEY_PERSONALIZATION).orEmpty(),
             memoryEnabled = getBoolean(KEY_MEMORY_ENABLED, true),
@@ -94,6 +100,7 @@ class SettingsRepository(
     @Synchronized
     fun save(settings: PocketPilotSettings) {
         require(settings.modelName.length <= MAX_MODEL_LENGTH) { "Model name is too long" }
+        require(settings.imageModelName.length <= MAX_MODEL_LENGTH) { "Image model name is too long" }
         if (settings.llmProvider == LlmProviderPreference.OPENAI_CHAT) {
             require(settings.llmBaseUrl.length <= MAX_ENDPOINT_LENGTH) { "LLM endpoint is too long" }
             require(settings.openAiModelName.length <= MAX_MODEL_LENGTH) {
@@ -101,6 +108,9 @@ class SettingsRepository(
             }
             require(settings.openAiBaseUrl.length <= MAX_ENDPOINT_LENGTH) {
                 "OpenAI endpoint is too long"
+            }
+            require(settings.openAiImageModelName.length <= MAX_MODEL_LENGTH) {
+                "OpenAI image model name is too long"
             }
             require(
                 settings.llmBaseUrl.isBlank() ||
@@ -140,6 +150,23 @@ class SettingsRepository(
         val openAiBaseUrl = candidateOpenAiBaseUrl
             .takeIf(LlmSettingsPolicy::isValidOpenAiBaseUrl)
             .orEmpty()
+        val candidateOpenAiImageModel = when (settings.llmProvider) {
+            LlmProviderPreference.OPENAI_CHAT -> settings.imageModelName.trim()
+            LlmProviderPreference.GLM -> settings.openAiImageModelName.trim().ifBlank {
+                get(KEY_OPENAI_IMAGE_MODEL)?.trim().orEmpty().ifBlank {
+                    get(KEY_IMAGE_MODEL)?.trim().orEmpty().takeIf {
+                        previousProvider == LlmProviderPreference.OPENAI_CHAT
+                    }.orEmpty()
+                }
+            }
+        }
+        val openAiImageModel = candidateOpenAiImageModel
+            .takeIf { it.length <= MAX_MODEL_LENGTH }
+            .orEmpty()
+        val imageModel = when (settings.llmProvider) {
+            LlmProviderPreference.OPENAI_CHAT -> openAiImageModel
+            LlmProviderPreference.GLM -> settings.llmProvider.defaultImageModel
+        }
         require(settings.remoteServer.length <= 240) { "Remote server label is too long" }
         require(settings.personalization.length <= 4_000) { "Personalization is too long" }
         val values = mapOf(
@@ -149,6 +176,8 @@ class SettingsRepository(
             KEY_LLM_BASE_URL to resolvedBaseUrl,
             KEY_OPENAI_MODEL to openAiModel,
             KEY_OPENAI_BASE_URL to openAiBaseUrl,
+            KEY_IMAGE_MODEL to imageModel,
+            KEY_OPENAI_IMAGE_MODEL to openAiImageModel,
             KEY_REMOTE_SERVER to settings.remoteServer.trim(),
             KEY_PERSONALIZATION to settings.personalization.trim(),
             KEY_MEMORY_ENABLED to settings.memoryEnabled.toString(),
@@ -209,6 +238,8 @@ class SettingsRepository(
         const val KEY_LLM_BASE_URL = "llm_base_url"
         const val KEY_OPENAI_MODEL = "openai_model"
         const val KEY_OPENAI_BASE_URL = "openai_base_url"
+        const val KEY_IMAGE_MODEL = "image_model"
+        const val KEY_OPENAI_IMAGE_MODEL = "openai_image_model"
         const val KEY_REMOTE_SERVER = "remote_server"
         const val KEY_PERSONALIZATION = "personalization"
         const val KEY_MEMORY_ENABLED = "memory_enabled"

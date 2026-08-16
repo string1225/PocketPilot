@@ -168,4 +168,64 @@ class LlmProtocolCodecTest {
         }
         assertEquals("LLM_RESPONSE_TOO_LARGE", error.code)
     }
+
+    @Test
+    fun chatStreamAccumulatesTextToolCallsAndFinalUsage() {
+        val request = LlmCompletionRequest(
+            config = LlmEndpointConfig(credentialId = CredentialIds.DEFAULT_LLM),
+            messages = listOf(LlmMessage("user", "Read README.md")),
+            tools = listOf(tool),
+            stream = true,
+        )
+        val encoded = JSONObject(String(OpenAiCompatibleProtocolCodec.encodeRequest(request)))
+        assertTrue(encoded.getBoolean("stream"))
+        assertTrue(encoded.getBoolean("tool_stream"))
+        assertFalse(encoded.has("stream_options"))
+        val apiName = encoded.getJSONArray("tools")
+            .getJSONObject(0)
+            .getJSONObject("function")
+            .getString("name")
+        val decoder = OpenAiCompatibleProtocolCodec.newChatCompletionsStreamDecoder(request)
+
+        assertEquals(
+            "我会",
+            decoder.accept(
+                """{"choices":[{"index":0,"delta":{"content":"我会"},"finish_reason":null}]}""",
+            )?.contentDelta,
+        )
+        decoder.accept(
+            """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"$apiName","arguments":"{\"path\":"}}]},"finish_reason":null}]}""",
+        )
+        decoder.accept(
+            """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}""",
+        )
+        val response = decoder.finish()
+
+        assertEquals("我会", response.content)
+        assertEquals("workspace.read", response.toolCalls.single().name)
+        assertEquals("README.md", JSONObject(response.toolCalls.single().argumentsJson).getString("path"))
+        assertEquals(LlmTokenUsage(12, 4, 16), response.usage)
+    }
+
+    @Test
+    fun officialOpenAiStreamRequestsUsageWhileGenericCompatibilityDoesNot() {
+        fun encoded(baseUrl: String): JSONObject = JSONObject(
+            String(
+                OpenAiCompatibleProtocolCodec.encodeRequest(
+                    LlmCompletionRequest(
+                        config = LlmEndpointConfig(
+                            baseUrl = baseUrl,
+                            credentialId = CredentialIds.DEFAULT_LLM,
+                        ),
+                        messages = listOf(LlmMessage("user", "test")),
+                        tools = emptyList(),
+                        stream = true,
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(encoded("https://api.openai.com/v1").getJSONObject("stream_options").getBoolean("include_usage"))
+        assertFalse(encoded("https://compatible.example.test/v1").has("stream_options"))
+    }
 }

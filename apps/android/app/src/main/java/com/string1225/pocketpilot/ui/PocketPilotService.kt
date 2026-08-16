@@ -10,6 +10,7 @@ import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
 import com.string1225.pocketpilot.model.AgentRunStatus
 import com.string1225.pocketpilot.model.Checkpoint
+import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.Conversation
 import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
@@ -23,6 +24,7 @@ import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
+import com.string1225.pocketpilot.model.TokenUsage
 import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
 import com.string1225.pocketpilot.security.CredentialIds
@@ -30,6 +32,7 @@ import com.string1225.pocketpilot.security.SecureCredentialStore
 import com.string1225.pocketpilot.llm.LlmEndpointConfig
 import com.string1225.pocketpilot.llm.LlmEndpointPolicy
 import com.string1225.pocketpilot.llm.LlmProtocol
+import com.string1225.pocketpilot.llm.LlmConnectionVerifier
 import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -67,6 +70,9 @@ interface PocketPilotService {
         isError: Boolean = false,
         createdAt: Long = System.currentTimeMillis(),
         messageId: String? = null,
+        status: String? = null,
+        tokenUsage: TokenUsage? = null,
+        attachments: List<ChatImageAttachment> = emptyList(),
     ): ConversationMessage
 
     fun loadSettings(): PocketPilotSettings
@@ -100,6 +106,7 @@ interface PocketPilotService {
         conversationId: String,
         runId: String,
         task: String,
+        attachments: List<ChatImageAttachment>,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus
 
@@ -122,6 +129,7 @@ class OfflinePocketPilotService(
     private val sshServers: SshServerRepository,
     private val plugins: PluginRepository,
     private val pluginRuns: PluginRunCoordinationGate,
+    private val llmConnectionVerifier: LlmConnectionVerifier? = null,
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean = true
     override val runtimeAvailable: Boolean = false
@@ -171,6 +179,9 @@ class OfflinePocketPilotService(
         isError: Boolean,
         createdAt: Long,
         messageId: String?,
+        status: String?,
+        tokenUsage: TokenUsage?,
+        attachments: List<ChatImageAttachment>,
     ): ConversationMessage = conversations.appendMessage(
         conversationId = conversationId,
         role = role,
@@ -180,6 +191,9 @@ class OfflinePocketPilotService(
         isError = isError,
         createdAt = createdAt,
         messageId = messageId,
+        status = status,
+        tokenUsage = tokenUsage,
+        attachments = attachments,
     )
 
     override fun loadSettings(): PocketPilotSettings = settings.load()
@@ -191,7 +205,14 @@ class OfflinePocketPilotService(
     override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
 
     override fun saveLlmConnection(settings: PocketPilotSettings, newSecret: CharArray?) =
-        persistLlmConnection(settings, newSecret, this.settings, credentials, pluginRuns)
+        persistLlmConnection(
+            settings,
+            newSecret,
+            this.settings,
+            credentials,
+            pluginRuns,
+            llmConnectionVerifier,
+        )
 
     override fun removeLlmCredential() = pluginRuns.mutate {
         credentials.remove(CredentialIds.DEFAULT_LLM)
@@ -254,6 +275,7 @@ class OfflinePocketPilotService(
         conversationId: String,
         runId: String,
         task: String,
+        attachments: List<ChatImageAttachment>,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus {
         pluginRuns.beginRun(runId)
@@ -340,6 +362,7 @@ internal fun persistLlmConnection(
     settingsRepository: SettingsRepository,
     credentials: SecureCredentialStore,
     runGate: PluginRunCoordinationGate,
+    connectionVerifier: LlmConnectionVerifier? = null,
 ) = runGate.mutate {
     synchronized(settingsRepository) {
         val normalizedSettings = normalizeLlmConnection(requestedSettings)
@@ -356,6 +379,11 @@ internal fun persistLlmConnection(
             require(!requiresNewSecret || (newSecret != null && newSecret.isNotEmpty())) {
                 "An AK is required after changing the model provider or endpoint."
             }
+            connectionVerifier?.verify(
+                normalizedSettings,
+                newSecret ?: previousSecret
+                    ?: throw IllegalArgumentException("AK / API Key is required"),
+            )
 
             if (newSecret == null) {
                 settingsRepository.save(normalizedSettings)
@@ -420,6 +448,8 @@ private fun disabledLlmSettings(
     llmBaseUrl = "",
     openAiModelName = "",
     openAiBaseUrl = "",
+    imageModelName = "",
+    openAiImageModelName = "",
 )
 
 internal fun persistNonLlmSettings(
@@ -442,7 +472,9 @@ private fun PocketPilotSettings.hasSameLlmConnectionAs(
     llmProtocol == other.llmProtocol &&
     llmBaseUrl == other.llmBaseUrl &&
     openAiModelName == other.openAiModelName &&
-    openAiBaseUrl == other.openAiBaseUrl
+    openAiBaseUrl == other.openAiBaseUrl &&
+    imageModelName == other.imageModelName &&
+    openAiImageModelName == other.openAiImageModelName
 
 internal fun normalizeLlmConnection(
     requestedSettings: PocketPilotSettings,
@@ -455,7 +487,14 @@ internal fun normalizeLlmConnection(
         modelName = requestedSettings.modelName.trim(),
         llmProtocol = LlmProtocolPreference.CHAT_COMPLETIONS,
         llmBaseUrl = resolvedBaseUrl,
+        imageModelName = when (requestedSettings.llmProvider) {
+            LlmProviderPreference.OPENAI_CHAT -> requestedSettings.imageModelName.trim()
+            LlmProviderPreference.GLM -> requestedSettings.llmProvider.defaultImageModel
+        },
     )
+    require(normalizedSettings.imageModelName.isNotBlank()) {
+        "An image model is required for this model connection."
+    }
     LlmEndpointPolicy.resolve(
         LlmEndpointConfig(
             protocol = LlmProtocol.CHAT_COMPLETIONS,

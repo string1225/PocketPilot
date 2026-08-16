@@ -133,9 +133,19 @@ class PocketPilotRuntimeBridge(
     }
 
     private fun dispatchTool(request: NativeToolRequest) {
+        val progressOpen = AtomicBoolean(true)
+        val dispatchRequest = request.copy(
+            progressSink = NativeToolProgressSink { payloadJson ->
+                if (progressOpen.get() && toolJobs.canStart(request.runId)) {
+                    sendEnvelope(
+                        RuntimeEnvelopeCodec.encodeToolProgress(request.context(), payloadJson),
+                    )
+                }
+            },
+        )
         val job = bridgeScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val result = toolDispatcher.dispatch(request)
+                val result = toolDispatcher.dispatch(dispatchRequest)
                 currentCoroutineContext().ensureActive()
                 val envelope = RuntimeEnvelopeCodec.encodeToolResult(request, result.payloadJson)
                 sendEnvelope(envelope)
@@ -173,6 +183,8 @@ class PocketPilotRuntimeBridge(
                         request.projectId,
                     ),
                 )
+            } finally {
+                progressOpen.set(false)
             }
         }
         if (toolJobs.track(request.runId, job)) job.start()

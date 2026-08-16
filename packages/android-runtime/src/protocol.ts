@@ -43,8 +43,16 @@ export interface ToolErrorEnvelope extends EnvelopeBase {
   readonly payload: unknown;
 }
 
+export interface ToolProgressEnvelope extends EnvelopeBase {
+  readonly type: "tool.progress";
+  readonly payload: unknown;
+}
+
 export type JavaScriptToNativeEnvelope = ToolRequestEnvelope | RuntimeEventEnvelope;
-export type NativeToJavaScriptEnvelope = ToolResultEnvelope | ToolErrorEnvelope;
+export type NativeToJavaScriptEnvelope =
+  | ToolResultEnvelope
+  | ToolErrorEnvelope
+  | ToolProgressEnvelope;
 
 export interface RuntimeStartRequest {
   readonly runId: string;
@@ -491,7 +499,11 @@ export const parseNativeEnvelope = (json: string): NativeToJavaScriptEnvelope =>
     typeof record.id !== "string" ||
     typeof record.runId !== "string" ||
     typeof record.projectId !== "string" ||
-    (record.type !== "tool.result" && record.type !== "tool.error") ||
+    (
+      record.type !== "tool.result" &&
+      record.type !== "tool.error" &&
+      record.type !== "tool.progress"
+    ) ||
     !("payload" in record)
   ) {
     throw new Error("Native bridge envelope has an invalid shape.");

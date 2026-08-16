@@ -25,6 +25,11 @@ import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
 import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import com.string1225.pocketpilot.llm.LlmToolRequestDispatcher
 import com.string1225.pocketpilot.llm.OpenAiCompatibleLlmClient
+import com.string1225.pocketpilot.llm.OpenAiCompatibleVisionClient
+import com.string1225.pocketpilot.llm.OpenAiCompatibleConnectionVerifier
+import com.string1225.pocketpilot.llm.VisionToolRequestDispatcher
+import com.string1225.pocketpilot.integrations.vision.AttachmentImageStore
+import com.string1225.pocketpilot.integrations.vision.FileAttachmentImageStore
 import com.string1225.pocketpilot.integrations.http.OkHttpToolExecutor
 import com.string1225.pocketpilot.security.AndroidKeystoreCredentialStore
 import com.string1225.pocketpilot.security.CredentialIds
@@ -40,6 +45,8 @@ class PocketPilotApplication : Application() {
     lateinit var agentRunCoordinator: AgentRunCoordinator
         private set
     lateinit var credentialStore: SecureCredentialStore
+        private set
+    lateinit var attachmentImageStore: AttachmentImageStore
         private set
 
     private var runtimeBridge: PocketPilotRuntimeBridge? = null
@@ -68,6 +75,7 @@ class PocketPilotApplication : Application() {
         val activeRuns = ActiveRunRegistry()
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
+        attachmentImageStore = FileAttachmentImageStore(this)
         settings.migrateLegacyLlmConnection(
             credentialConfigured = credentialStore.contains(CredentialIds.DEFAULT_LLM),
         )
@@ -94,10 +102,17 @@ class PocketPilotApplication : Application() {
                 approvals = approvals,
                 fallback = integrationDispatcher,
             )
+            val visionDispatcher = VisionToolRequestDispatcher(
+                client = OpenAiCompatibleVisionClient(credentialStore),
+                attachments = attachmentImageStore,
+                settings = settings,
+                activeRuns = activeRuns,
+                fallback = httpDispatcher,
+            )
             val toolDispatcher = LlmToolRequestDispatcher(
                 client = OpenAiCompatibleLlmClient(credentialStore),
                 activeRuns = activeRuns,
-                fallback = httpDispatcher,
+                fallback = visionDispatcher,
             )
             val bridge = PocketPilotRuntimeBridge(
                 webView = WebView(this),
@@ -120,6 +135,7 @@ class PocketPilotApplication : Application() {
                 sshServers = sshServers,
                 plugins = plugins,
                 pluginRuns = pluginRuns,
+                llmConnectionVerifier = OpenAiCompatibleConnectionVerifier(),
             )
         } catch (error: Throwable) {
             runtimeBridge?.close()
@@ -136,6 +152,7 @@ class PocketPilotApplication : Application() {
                 sshServers = sshServers,
                 plugins = plugins,
                 pluginRuns = pluginRuns,
+                llmConnectionVerifier = OpenAiCompatibleConnectionVerifier(),
             )
         }
         agentRunCoordinator = AgentRunCoordinator(

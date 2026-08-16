@@ -63,6 +63,9 @@ data class TimelineItem(
     val body: String,
     val createdAt: Long,
     val isError: Boolean = false,
+    val status: String? = null,
+    val tokenUsage: TokenUsage? = null,
+    val attachments: List<ChatImageAttachment> = emptyList(),
 )
 
 data class Conversation(
@@ -95,6 +98,28 @@ data class ConversationMessage(
     val createdAt: Long,
     val runId: String? = null,
     val isError: Boolean = false,
+    val status: String? = null,
+    val tokenUsage: TokenUsage? = null,
+    val attachments: List<ChatImageAttachment> = emptyList(),
+)
+
+data class TokenUsage(
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+    val totalTokens: Long? = null,
+)
+
+/**
+ * Native-only attachment metadata. [previewUri] may reference only an app-owned
+ * FileProvider URI; it is never included in WebView or model tool arguments.
+ */
+data class ChatImageAttachment(
+    val id: String,
+    val projectId: String,
+    val displayName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val previewUri: String? = null,
 )
 
 enum class ThemePreference(val value: String) {
@@ -135,18 +160,21 @@ enum class LlmProviderPreference(
     val value: String,
     val defaultBaseUrl: String,
     val defaultModel: String,
+    val defaultImageModel: String,
     val hasEditableBaseUrl: Boolean,
 ) {
     OPENAI_CHAT(
         value = "openai_chat",
         defaultBaseUrl = "",
         defaultModel = "",
+        defaultImageModel = "",
         hasEditableBaseUrl = true,
     ),
     GLM(
         value = "glm",
         defaultBaseUrl = GLM_CHAT_BASE_URL,
-        defaultModel = "glm-5.2",
+        defaultModel = "glm-5.3",
+        defaultImageModel = GLM_IMAGE_MODEL,
         hasEditableBaseUrl = false,
     );
 
@@ -156,6 +184,9 @@ enum class LlmProviderPreference(
     }
 }
 
+const val GLM_IMAGE_MODEL = "glm-5v-turbo"
+const val GLM_IMAGE_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+
 /** Provider-specific defaults and compatibility rules shared by persistence and UI code. */
 object LlmSettingsPolicy {
     data class LoadedConnection(
@@ -164,6 +195,8 @@ object LlmSettingsPolicy {
         val baseUrl: String,
         val openAiModelName: String,
         val openAiBaseUrl: String,
+        val imageModelName: String,
+        val openAiImageModelName: String,
     )
 
     fun loadConnection(
@@ -172,6 +205,8 @@ object LlmSettingsPolicy {
         persistedBaseUrl: String?,
         persistedOpenAiModel: String?,
         persistedOpenAiBaseUrl: String?,
+        persistedImageModel: String? = null,
+        persistedOpenAiImageModel: String? = null,
     ): LoadedConnection {
         val provider = loadProvider(persistedProvider, persistedBaseUrl)
         val activeModel = persistedModel?.trim()
@@ -186,6 +221,12 @@ object LlmSettingsPolicy {
             ?.takeIf { it.isNotEmpty() && isValidOpenAiBaseUrl(it) }
             ?: activeBaseUrl.takeIf { provider == LlmProviderPreference.OPENAI_CHAT }
             ?: ""
+        val activeImageModel = persistedImageModel?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_MODEL_LENGTH }
+        val openAiImageModel = persistedOpenAiImageModel?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_MODEL_LENGTH }
+            ?: activeImageModel.takeIf { provider == LlmProviderPreference.OPENAI_CHAT }
+            ?: ""
         return LoadedConnection(
             provider = provider,
             modelName = when (provider) {
@@ -195,6 +236,11 @@ object LlmSettingsPolicy {
             baseUrl = resolveBaseUrl(provider, openAiBaseUrl),
             openAiModelName = openAiModel,
             openAiBaseUrl = openAiBaseUrl,
+            imageModelName = when (provider) {
+                LlmProviderPreference.OPENAI_CHAT -> openAiImageModel
+                LlmProviderPreference.GLM -> provider.defaultImageModel
+            },
+            openAiImageModelName = openAiImageModel,
         )
     }
 
@@ -284,6 +330,8 @@ data class PocketPilotSettings(
     val llmBaseUrl: String = LlmProviderPreference.OPENAI_CHAT.defaultBaseUrl,
     val openAiModelName: String = "",
     val openAiBaseUrl: String = "",
+    val imageModelName: String = LlmProviderPreference.OPENAI_CHAT.defaultImageModel,
+    val openAiImageModelName: String = "",
     val remoteServer: String = "",
     val personalization: String = "",
     val memoryEnabled: Boolean = true,

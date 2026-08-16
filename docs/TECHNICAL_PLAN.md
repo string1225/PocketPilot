@@ -14,7 +14,7 @@ PocketPilot 是“手机上的 Agent 控制中心”，不是把完整桌面开�
 - Native 一次性审批、Android Keystore 凭据、后台前台服务和结果通知。
 - 离线 Provider、自动测试、模拟器/USB/无线真机指南。
 
-本版暂不实现：账号或中心云、远程文件系统、目录挂载同步、MCP/插件安装市场、LLM token 流式展示、跨进程重启恢复运行中的模型请求。
+本版暂不实现：账号或中心云、远程文件系统、目录挂载同步、MCP/插件安装市场、跨进程重启恢复运行中的模型请求。
 
 ## 2. 总体架构
 
@@ -58,7 +58,7 @@ Projects & conversations <- Chat -> Artifacts
 - 未保存编辑在切项目、Restore、启动 Agent 等冲突动作前阻止覆盖。
 - 通知 deep link 同时携带 projectId/conversationId，冷启动和已有 Activity 都会校验关系后导航。
 
-SQLite v4 主要表：
+SQLite v5 主要表：
 
 ```text
 projects -> conversations -> messages
@@ -94,7 +94,8 @@ Android 使用只加载 `android_asset` 的 WebView 运行 IIFE bundle。Bridge 
 | --- | --- | --- |
 | 协议 | OpenAI-compatible Chat Completions | OpenAI-compatible Chat Completions |
 | Endpoint | 用户填写，必填并显示 | 内置 `https://open.bigmodel.cn/api/coding/paas/v4`，不显示 |
-| Model | 用户填写，必填 | 默认 `glm-5.2` |
+| Text model | 用户填写，必填 | 默认 `glm-5.3` |
+| Image model | 用户填写，必填 | 固定 `glm-5v-turbo` |
 | API Key（AK） | 用户填写，必填 | 用户填写，必填 |
 | Native path | 在 Endpoint 后追加 `/chat/completions` | 在内置 Endpoint 后追加 `/chat/completions` |
 
@@ -205,7 +206,7 @@ GitHub Actions 在 `dev/main` 运行同一 TypeScript/Android 构建，并上传
 
 ## 9. 后续路线
 
-1. 流式 token/Tool 日志和可恢复的长任务协议。
+1. 跨进程重启恢复运行中的模型请求；当前版本已支持 Chat Completions SSE 增量显示、Token usage 和进程内 FIFO 消息队列。
 2. Checkpoint 内容寻址、BLOB/大文件策略、压缩和保留策略。
 3. Android Storage Access Framework 显式导入。
 4. SSH upload/download 与远端任务日志，但仍不伪装成本地挂载。

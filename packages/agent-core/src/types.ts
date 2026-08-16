@@ -41,11 +41,28 @@ export interface ProviderRequest {
   readonly messages: readonly AgentMessage[];
   readonly tools: readonly ToolDefinition[];
   readonly signal: AbortSignal;
+  /**
+   * Optional, in-process observer for text generated before the provider call
+   * completes. It is never serialized to a native or network boundary.
+   */
+  readonly onStreamEvent?: (event: ProviderStreamEvent) => void;
+}
+
+export interface ProviderTokenUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
+
+export interface ProviderStreamEvent {
+  readonly contentDelta?: string;
+  readonly usage?: ProviderTokenUsage;
 }
 
 export interface ProviderResponse {
   readonly content?: string;
   readonly toolCalls?: readonly ProviderToolCall[];
+  readonly usage?: ProviderTokenUsage;
 }
 
 export interface AgentProvider {
@@ -66,8 +83,18 @@ export type AgentEvent =
       readonly task: string;
     })
   | (AgentEventBase & {
-      readonly type: "assistant.message";
+      readonly type: "assistant.delta";
+      readonly messageId: string;
+      readonly delta: string;
+      /** Complete assistant text accumulated for this provider step. */
       readonly content: string;
+    })
+  | (AgentEventBase & {
+      readonly type: "assistant.message";
+      readonly messageId: string;
+      readonly content: string;
+      readonly status?: "completed" | "failed" | "cancelled";
+      readonly usage?: ProviderTokenUsage;
     })
   | (AgentEventBase & {
       readonly type: "tool.started";
@@ -87,6 +114,7 @@ export type AgentEvent =
       readonly type: "run.completed";
       readonly output: string;
       readonly steps: number;
+      readonly usage?: ProviderTokenUsage;
     })
   | (AgentEventBase & {
       readonly type: "run.failed";

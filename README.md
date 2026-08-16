@@ -18,9 +18,11 @@ Compose Chat
 - 首屏直接进入聊天；右滑进入“项目与会话”，左滑进入“产出物”。
 - 右上角可切换项目/会话或新建会话；会话和消息持久化在 SQLite。
 - 左上角 PocketPilot 图标进入设置：模型、远程服务器、个性化、记忆、工具列表、插件入口、外观和中英文。
-- 模型协议默认选择 OpenAI Chat API：用户必须填写 OpenAI-compatible HTTPS Endpoint、模型编码和 API Key（AK）。也可选择 GLM；此时隐藏 Endpoint 并使用内置 `https://open.bigmodel.cn/api/coding/paas/v4`，模型默认 `glm-5.2`，AK 仍必填。后端保留 Responses 兼容能力，但它不是设置页选项。
+- 模型协议默认选择 OpenAI Chat API：用户必须填写 OpenAI-compatible HTTPS Endpoint、文本模型、图片模型和 API Key（AK）。也可选择 GLM；此时隐藏 Endpoint，文本模型默认 `glm-5.3`，图片识别固定使用 `glm-5v-turbo`，AK 仍必填。保存连接前会分别验证文本和图片模型。
 - API Key、Git Token、SSH 密码/私钥使用 Android Keystore 保护的 AES-GCM 加密存储，不写进 Workspace、SQLite 明文字段、日志或 Git。
 - Agent Run 由 Application 级 Coordinator 管理；离开 Activity 后由前台服务继续，结束、失败或取消后发通知，点击通知回到对应项目和会话。
+- Chat Completions 使用 SSE 原位更新同一条 Assistant 消息；消息底部显示状态与 Token usage，运行中的新消息按 Project 进入 FIFO 队列。
+- 支持中英文系统语音识别和多图片上传；图片先复制到 App 私有目录，再由受控 `image.analyze` 工具调用配置的视觉模型。
 - Workspace 八个工具、自动 Checkpoint、Diff 与 Restore。
 - JGit：init、clone、status、diff、commit、pull、push。
 - HTTP：对公网 HTTP(S) 发起有超时和正文上限的请求；禁用重定向，拒绝 IP literal、内网/回环/链路本地/元数据地址及敏感请求头，二进制响应以 Base64 无损返回。
@@ -75,7 +77,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 ## 首次运行
 
 1. 打开左上角设置。
-2. 在“模型”中使用默认的 OpenAI Chat API，并填写 HTTPS Endpoint、模型编码和 API Key；或选择 GLM，确认模型编码（默认 `glm-5.2`）并录入 API Key，GLM 的 Endpoint 由 App 内置且不显示。
+2. 在“模型”中使用默认的 OpenAI Chat API，并填写 HTTPS Endpoint、文本模型、图片模型和 API Key；或选择 GLM，确认文本模型（默认 `glm-5.3`）并录入 API Key，图片识别固定使用 `glm-5v-turbo`。点击“保存并测试”后，App 会先验证两种模型再启用连接。
 3. 如需私有 HTTPS Git，在“Git HTTPS 凭据”录入低权限 Token。
 4. 如需 SSH，添加服务器，填写服务器公钥的 `SHA256:` 指纹，并录入密码或通过系统文件选择器导入 OpenSSH/PEM 私钥。
 5. 返回聊天输入任务；需要远端副作用时，在审批框核对完整目标和操作。

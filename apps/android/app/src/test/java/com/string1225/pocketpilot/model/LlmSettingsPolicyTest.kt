@@ -15,6 +15,8 @@ class LlmSettingsPolicyTest {
         assertEquals("", settings.llmBaseUrl)
         assertEquals("", settings.openAiModelName)
         assertEquals("", settings.openAiBaseUrl)
+        assertEquals("", settings.imageModelName)
+        assertEquals("", settings.openAiImageModelName)
         assertEquals(LlmProtocolPreference.CHAT_COMPLETIONS, settings.llmProtocol)
         assertTrue(settings.llmProvider.hasEditableBaseUrl)
     }
@@ -67,6 +69,7 @@ class LlmSettingsPolicyTest {
         assertEquals(GLM_CHAT_BASE_URL, loaded.baseUrl)
         assertEquals("", loaded.openAiModelName)
         assertEquals("", loaded.openAiBaseUrl)
+        assertEquals(GLM_IMAGE_MODEL, loaded.imageModelName)
     }
 
     @Test
@@ -94,12 +97,15 @@ class LlmSettingsPolicyTest {
             persistedBaseUrl = GLM_CHAT_BASE_URL,
             persistedOpenAiModel = "my-openai-model",
             persistedOpenAiBaseUrl = "https://gateway.example/v1",
+            persistedOpenAiImageModel = "my-vision-model",
         )
 
         assertEquals(LlmProviderPreference.GLM, loaded.provider)
         assertEquals("glm-5.2", loaded.modelName)
         assertEquals("my-openai-model", loaded.openAiModelName)
         assertEquals("https://gateway.example/v1", loaded.openAiBaseUrl)
+        assertEquals(GLM_IMAGE_MODEL, loaded.imageModelName)
+        assertEquals("my-vision-model", loaded.openAiImageModelName)
     }
 
     @Test
@@ -123,7 +129,8 @@ class LlmSettingsPolicyTest {
         assertEquals("", openAi.baseUrl)
         assertEquals("", openAi.openAiModelName)
         assertEquals("", openAi.openAiBaseUrl)
-        assertEquals("glm-5.2", glm.modelName)
+        assertEquals("glm-5.3", glm.modelName)
+        assertEquals(GLM_IMAGE_MODEL, glm.imageModelName)
         assertEquals(GLM_CHAT_BASE_URL, glm.baseUrl)
     }
 
@@ -156,7 +163,8 @@ class LlmSettingsPolicyTest {
 
     @Test
     fun `GLM supplies its own model default`() {
-        assertEquals("glm-5.2", LlmProviderPreference.GLM.defaultModel)
+        assertEquals("glm-5.3", LlmProviderPreference.GLM.defaultModel)
+        assertEquals(GLM_IMAGE_MODEL, LlmProviderPreference.GLM.defaultImageModel)
         assertEquals("", LlmProviderPreference.OPENAI_CHAT.defaultModel)
     }
 

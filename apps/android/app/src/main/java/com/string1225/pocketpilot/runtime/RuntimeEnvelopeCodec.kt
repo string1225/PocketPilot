@@ -90,6 +90,19 @@ internal object RuntimeEnvelopeCodec {
         return envelope("tool.error", context, payload).toString()
     }
 
+    fun encodeToolProgress(context: RuntimeRequestContext, progressJson: String): String {
+        val progress = parseObject(progressJson, "Native Tool progress")
+        val encoded = envelope("tool.progress", context, progress).toString()
+        if (encoded.length > MAX_ENVELOPE_LENGTH) {
+            throw RuntimeProtocolException(
+                code = "message_too_large",
+                message = "Native Tool progress exceeds $MAX_ENVELOPE_LENGTH characters",
+                context = context,
+            )
+        }
+        return encoded
+    }
+
     private fun decodeToolRequest(
         context: RuntimeRequestContext?,
         payload: JSONObject,

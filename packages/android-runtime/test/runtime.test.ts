@@ -311,6 +311,7 @@ describe("Android runtime bridge", () => {
       ["git.pull", "network"],
       ["git.push", "network"],
       ["http.request", "network"],
+      ["image.analyze", "network"],
       ["ssh.execute", "remote"]
     ]);
     for (const schema of schemas.values()) {
@@ -382,6 +383,14 @@ describe("Android runtime bridge", () => {
     expect(tools.find(({ name }) => name === "http.request")?.description).toContain(
       "bodyEncoding (utf8 or base64)",
     );
+    expect(schemas.get("image.analyze")).toMatchObject({
+      required: ["attachmentId", "prompt"],
+      additionalProperties: false,
+      properties: {
+        attachmentId: { type: "string", minLength: 36, maxLength: 64 },
+        prompt: { type: "string", minLength: 1, maxLength: 8_192 }
+      }
+    });
     expect(schemas.get("git.clone")).toMatchObject({
       properties: {
         timeoutMillis: {
