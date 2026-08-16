@@ -1,5 +1,7 @@
 package com.string1225.pocketpilot.model
 
+import java.net.URI
+
 data class Project(
     val id: String,
     val name: String,
@@ -126,6 +128,132 @@ enum class LlmProtocolPreference(val value: String) {
     }
 }
 
+const val GLM_CHAT_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
+private const val LEGACY_GLM_RESPONSES_BASE_URL = "https://open.bigmodel.cn/api/v1"
+
+enum class LlmProviderPreference(
+    val value: String,
+    val defaultBaseUrl: String,
+    val defaultModel: String,
+    val hasEditableBaseUrl: Boolean,
+) {
+    OPENAI_CHAT(
+        value = "openai_chat",
+        defaultBaseUrl = "",
+        defaultModel = "",
+        hasEditableBaseUrl = true,
+    ),
+    GLM(
+        value = "glm",
+        defaultBaseUrl = GLM_CHAT_BASE_URL,
+        defaultModel = "glm-5.2",
+        hasEditableBaseUrl = false,
+    );
+
+    companion object {
+        fun fromValueOrNull(value: String?): LlmProviderPreference? =
+            entries.firstOrNull { it.value == value }
+    }
+}
+
+/** Provider-specific defaults and compatibility rules shared by persistence and UI code. */
+object LlmSettingsPolicy {
+    data class LoadedConnection(
+        val provider: LlmProviderPreference,
+        val modelName: String,
+        val baseUrl: String,
+        val openAiModelName: String,
+        val openAiBaseUrl: String,
+    )
+
+    fun loadConnection(
+        persistedProvider: String?,
+        persistedModel: String?,
+        persistedBaseUrl: String?,
+        persistedOpenAiModel: String?,
+        persistedOpenAiBaseUrl: String?,
+    ): LoadedConnection {
+        val provider = loadProvider(persistedProvider, persistedBaseUrl)
+        val activeModel = persistedModel?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_MODEL_LENGTH }
+        val activeBaseUrl = persistedBaseUrl?.trim()
+            ?.takeIf { it.isNotEmpty() && isValidOpenAiBaseUrl(it) }
+        val openAiModel = persistedOpenAiModel?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= MAX_MODEL_LENGTH }
+            ?: activeModel.takeIf { provider == LlmProviderPreference.OPENAI_CHAT }
+            ?: ""
+        val openAiBaseUrl = persistedOpenAiBaseUrl?.trim()
+            ?.takeIf { it.isNotEmpty() && isValidOpenAiBaseUrl(it) }
+            ?: activeBaseUrl.takeIf { provider == LlmProviderPreference.OPENAI_CHAT }
+            ?: ""
+        return LoadedConnection(
+            provider = provider,
+            modelName = when (provider) {
+                LlmProviderPreference.OPENAI_CHAT -> openAiModel
+                LlmProviderPreference.GLM -> activeModel ?: provider.defaultModel
+            },
+            baseUrl = resolveBaseUrl(provider, openAiBaseUrl),
+            openAiModelName = openAiModel,
+            openAiBaseUrl = openAiBaseUrl,
+        )
+    }
+
+    fun loadProvider(
+        persistedProvider: String?,
+        persistedBaseUrl: String?,
+    ): LlmProviderPreference = LlmProviderPreference.fromValueOrNull(persistedProvider)
+        ?: inferLegacyProvider(persistedBaseUrl)
+
+    fun inferLegacyProvider(persistedBaseUrl: String?): LlmProviderPreference {
+        val normalized = persistedBaseUrl?.trim()?.trimEnd('/')?.lowercase().orEmpty()
+        return if (normalized == GLM_CHAT_BASE_URL.lowercase() ||
+            normalized == LEGACY_GLM_RESPONSES_BASE_URL.lowercase()
+        ) {
+            LlmProviderPreference.GLM
+        } else {
+            LlmProviderPreference.OPENAI_CHAT
+        }
+    }
+
+    fun resolveBaseUrl(
+        provider: LlmProviderPreference,
+        configuredBaseUrl: String?,
+    ): String = when (provider) {
+        LlmProviderPreference.OPENAI_CHAT ->
+            configuredBaseUrl?.trim().orEmpty()
+
+        LlmProviderPreference.GLM -> GLM_CHAT_BASE_URL
+    }
+
+    fun requiresNewCredential(
+        previousProvider: LlmProviderPreference,
+        previousBaseUrl: String,
+        newProvider: LlmProviderPreference,
+        newBaseUrl: String,
+        credentialConfigured: Boolean,
+    ): Boolean {
+        if (!credentialConfigured || previousProvider != newProvider) return true
+        if (newProvider == LlmProviderPreference.GLM) return false
+        return normalizeEndpoint(previousBaseUrl) != normalizeEndpoint(newBaseUrl)
+    }
+
+    fun isValidOpenAiBaseUrl(value: String): Boolean {
+        if (value.length !in 1..MAX_ENDPOINT_LENGTH) return false
+        val uri = runCatching { URI(value) }.getOrNull() ?: return false
+        return uri.scheme.equals("https", ignoreCase = true) &&
+            !uri.host.isNullOrBlank() &&
+            (uri.port == -1 || uri.port in 1..65_535) &&
+            uri.rawUserInfo == null &&
+            uri.rawQuery == null &&
+            uri.rawFragment == null
+    }
+
+    private fun normalizeEndpoint(value: String): String = value.trim().trimEnd('/')
+
+    private const val MAX_MODEL_LENGTH = 128
+    private const val MAX_ENDPOINT_LENGTH = 2_048
+}
+
 enum class SshAuthType(val value: String) {
     PASSWORD("password"),
     PRIVATE_KEY("private_key");
@@ -150,9 +278,12 @@ data class RemoteServerProfile(
 )
 
 data class PocketPilotSettings(
-    val modelName: String = "glm-5.2",
+    val modelName: String = LlmProviderPreference.OPENAI_CHAT.defaultModel,
+    val llmProvider: LlmProviderPreference = LlmProviderPreference.OPENAI_CHAT,
     val llmProtocol: LlmProtocolPreference = LlmProtocolPreference.CHAT_COMPLETIONS,
-    val llmBaseUrl: String = "https://open.bigmodel.cn/api/coding/paas/v4",
+    val llmBaseUrl: String = LlmProviderPreference.OPENAI_CHAT.defaultBaseUrl,
+    val openAiModelName: String = "",
+    val openAiBaseUrl: String = "",
     val remoteServer: String = "",
     val personalization: String = "",
     val memoryEnabled: Boolean = true,

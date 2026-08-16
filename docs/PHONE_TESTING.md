@@ -152,19 +152,17 @@ adb devices -l
 ## 7. 真实 LLM 测试
 
 1. 左上角设置 > 模型。
-2. 默认模型应为 `glm-5.2`。
-3. Chat Completions 默认 Base URL：
+2. 模型协议默认应选中“OpenAI Chat API”；Endpoint、模型编码和 API Key（AK）输入框均显示且为空时不能保存。填写专用测试用 OpenAI-compatible HTTPS Endpoint、模型编码与 AK 后保存。
+3. 发送“列出当前项目文件”；确认出现真实 assistant 消息和 `workspace.list` Tool 轨迹。在同一会话继续追问，验证多轮历史。
+4. 返回设置，把模型协议切换为“GLM”；Endpoint 输入框应隐藏，实际请求固定使用：
    `https://open.bigmodel.cn/api/coding/paas/v4`
-4. Responses 默认 Base URL：
-   `https://open.bigmodel.cn/api/v1`
-5. 在设备键盘中粘贴测试 API Key 并保存。界面只显示“已配置”，不会回显明文。
-6. 发送“列出当前项目文件”；确认出现真实 assistant 消息和 `workspace.list` Tool 轨迹。
-7. 分别切换两种协议；在同一会话连续追问，验证多轮历史。
-8. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
+5. GLM 模型编码应默认为 `glm-5.2`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 保存并再次验证 assistant 消息、Tool calling 与多轮历史。
+6. 切回 OpenAI Chat API，确认 Endpoint 输入框重新显示且必填。设置 UI 不应再显示 Responses 协议选项；Responses 仅保留为后端兼容能力。
+7. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
 
 不要使用生产主 Key。建议创建可撤销、限额的测试 Key。不要截图 Key 输入框，不要把 Key 放进项目文件或 logcat。
 
-注意：智谱的 [Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)同时声明套餐权益仅限页面列出的受支持工具，PocketPilot 当前不在名单中。请先确认账号/套餐允许第三方客户端调用；否则改用你有权访问的 OpenAI-compatible Endpoint，不能仅凭 Base URL 可连接就推断套餐授权成立。
+注意：智谱的 [Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)同时声明套餐权益仅限页面列出的受支持工具，PocketPilot 当前不在名单中。请先确认账号/套餐允许第三方客户端调用；否则选择 OpenAI Chat API 并填写你有权访问的 OpenAI-compatible Endpoint，不能仅凭 GLM 内置 Endpoint 可连接就推断套餐授权成立。
 
 ### HTTP Tool Smoke Test
 

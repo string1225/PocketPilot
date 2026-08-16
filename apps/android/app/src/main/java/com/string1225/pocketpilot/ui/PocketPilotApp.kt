@@ -110,7 +110,7 @@ fun PocketPilotApp(viewModel: PocketPilotViewModel) {
                 remoteServers = state.remoteServers,
                 plugins = state.plugins,
                 onSettingsChange = viewModel::updateSettings,
-                onSaveLlmCredential = viewModel::saveLlmCredential,
+                onSaveLlmConnection = viewModel::saveLlmConnection,
                 onRemoveLlmCredential = viewModel::removeLlmCredential,
                 onSaveGitCredential = viewModel::saveGitCredential,
                 onRemoveGitCredential = viewModel::removeGitCredential,

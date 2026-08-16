@@ -9,7 +9,7 @@ PocketPilot 是“手机上的 Agent 控制中心”，不是把完整桌面开�
 - Chat-first Android UI、项目/会话/产出物三页手势导航。
 - 会话与消息 SQLite 持久化、多项目隔离、个性化/记忆/主题/语言设置。
 - TypeScript Agent Loop 与 Native JSON Bridge。
-- OpenAI-compatible Chat Completions / Responses。
+- 默认 OpenAI-compatible Chat Completions 与可选 GLM 预设；后端保留 Responses 兼容能力。
 - Workspace、Checkpoint、JGit 和 SSHJ 真实工具。
 - Native 一次性审批、Android Keystore 凭据、后台前台服务和结果通知。
 - 离线 Provider、自动测试、模拟器/USB/无线真机指南。
@@ -88,17 +88,21 @@ Android 使用只加载 `android_asset` 的 WebView 运行 IIFE bundle。Bridge 
 
 ## 5. LLM Provider
 
-默认配置：
+设置页提供两个模型协议选项：
 
-| 字段 | Chat Completions | Responses |
+| 字段 | OpenAI Chat API（默认） | GLM |
 | --- | --- | --- |
-| Model | `glm-5.2` | `glm-5.2` |
-| Base URL | `https://open.bigmodel.cn/api/coding/paas/v4` | `https://open.bigmodel.cn/api/v1` |
-| Native path | `/chat/completions` | `/responses` |
+| 协议 | OpenAI-compatible Chat Completions | OpenAI-compatible Chat Completions |
+| Endpoint | 用户填写，必填并显示 | 内置 `https://open.bigmodel.cn/api/coding/paas/v4`，不显示 |
+| Model | 用户填写，必填 | 默认 `glm-5.2` |
+| API Key（AK） | 用户填写，必填 | 用户填写，必填 |
+| Native path | 在 Endpoint 后追加 `/chat/completions` | 在内置 Endpoint 后追加 `/chat/completions` |
 
-端点与模型默认值按[智谱 GLM Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)配置；PocketPilot 同时允许用户改成自己的 OpenAI-compatible HTTPS Endpoint。
+OpenAI Chat API 是默认选择，不预置 Endpoint、模型或 AK。GLM 是便捷预设：Endpoint 按[智谱 GLM Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)固定并从 UI 隐藏，但不会内置 AK。切换选项时必须重新按当前选项校验必填字段，不能把“隐藏 Endpoint”误判为“无需 Endpoint”。
 
-同一官方页面声明 Coding Plan 权益仅限其列出的受支持工具，PocketPilot 当前不在名单中。因此默认值只是协议配置模板，不代表套餐授权；用户必须确认自身账号/套餐允许第三方客户端调用，或改用其他有权访问的兼容端点。
+同一官方页面声明 Coding Plan 权益仅限其列出的受支持工具，PocketPilot 当前不在名单中。因此 GLM 预设只代表协议配置，不代表套餐授权；用户必须确认自身账号/套餐允许第三方客户端调用，或使用 OpenAI Chat API 配置其他有权访问的兼容端点。
+
+Provider 后端仍兼容 OpenAI Responses 请求与响应映射，供迁移或内部集成使用；Responses 不再作为设置 UI 中可选择的模型协议。
 
 Provider 支持：system/user/assistant/tool 历史、function tools、tool calls、结构化错误、超时和请求/响应体上限。Endpoint 只允许 HTTPS，拒绝 userinfo、query、fragment、重定向和不受支持路径。
 
@@ -192,7 +196,7 @@ Pop-Location
 - 首屏 Chat；左右手势与顶栏入口正确。
 - 会话、消息、主题、语言和非秘密设置重启后仍在。
 - Android Keystore instrumentation 测试通过，仓库 secret scan 无凭据。
-- Chat/Responses 多轮消息和 Tool calling contract 测试通过。
+- OpenAI-compatible Chat Completions 多轮消息与 Tool calling contract 测试通过；Responses 后端映射仅作为非 UI 兼容 contract 验证。
 - Git/SSH 正常、拒绝、超时、取消、远端拒绝、错误主机指纹均有覆盖。
 - 切后台后 Run 与通知继续；点击通知定位原会话。
 - Runtime bundle 与提交的 Android asset 字节一致。

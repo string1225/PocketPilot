@@ -16,6 +16,9 @@ import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
 import com.string1225.pocketpilot.model.InstalledPlugin
+import com.string1225.pocketpilot.model.LlmProviderPreference
+import com.string1225.pocketpilot.model.LlmProtocolPreference
+import com.string1225.pocketpilot.model.LlmSettingsPolicy
 import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
@@ -24,6 +27,9 @@ import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
 import com.string1225.pocketpilot.security.CredentialIds
 import com.string1225.pocketpilot.security.SecureCredentialStore
+import com.string1225.pocketpilot.llm.LlmEndpointConfig
+import com.string1225.pocketpilot.llm.LlmEndpointPolicy
+import com.string1225.pocketpilot.llm.LlmProtocol
 import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -66,7 +72,7 @@ interface PocketPilotService {
     fun loadSettings(): PocketPilotSettings
     fun saveSettings(settings: PocketPilotSettings)
     fun hasLlmCredential(): Boolean
-    fun saveLlmCredential(secret: CharArray)
+    fun saveLlmConnection(settings: PocketPilotSettings, newSecret: CharArray?)
     fun removeLlmCredential()
     fun hasGitCredential(): Boolean
     fun saveGitCredential(secret: CharArray)
@@ -179,16 +185,17 @@ class OfflinePocketPilotService(
     override fun loadSettings(): PocketPilotSettings = settings.load()
 
     override fun saveSettings(settings: PocketPilotSettings) {
-        this.settings.save(settings)
+        persistNonLlmSettings(settings, this.settings)
     }
 
     override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
 
-    override fun saveLlmCredential(secret: CharArray) {
-        credentials.put(CredentialIds.DEFAULT_LLM, secret)
-    }
+    override fun saveLlmConnection(settings: PocketPilotSettings, newSecret: CharArray?) =
+        persistLlmConnection(settings, newSecret, this.settings, credentials, pluginRuns)
 
-    override fun removeLlmCredential() = credentials.remove(CredentialIds.DEFAULT_LLM)
+    override fun removeLlmCredential() = pluginRuns.mutate {
+        credentials.remove(CredentialIds.DEFAULT_LLM)
+    }
 
     override fun hasGitCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)
 
@@ -325,4 +332,137 @@ class OfflinePocketPilotService(
         createdAt = System.currentTimeMillis(),
         isError = kind == TimelineItemKind.ERROR,
     )
+}
+
+internal fun persistLlmConnection(
+    requestedSettings: PocketPilotSettings,
+    newSecret: CharArray?,
+    settingsRepository: SettingsRepository,
+    credentials: SecureCredentialStore,
+    runGate: PluginRunCoordinationGate,
+) = runGate.mutate {
+    synchronized(settingsRepository) {
+        val normalizedSettings = normalizeLlmConnection(requestedSettings)
+        val previousSettings = settingsRepository.load()
+        val previousSecret = credentials.get(CredentialIds.DEFAULT_LLM)
+        try {
+            val requiresNewSecret = LlmSettingsPolicy.requiresNewCredential(
+                previousProvider = previousSettings.llmProvider,
+                previousBaseUrl = previousSettings.llmBaseUrl,
+                newProvider = normalizedSettings.llmProvider,
+                newBaseUrl = normalizedSettings.llmBaseUrl,
+                credentialConfigured = previousSecret != null,
+            )
+            require(!requiresNewSecret || (newSecret != null && newSecret.isNotEmpty())) {
+                "An AK is required after changing the model provider or endpoint."
+            }
+
+            if (newSecret == null) {
+                settingsRepository.save(normalizedSettings)
+                return@synchronized
+            }
+
+            try {
+                removeCredentialIfPresent(credentials, CredentialIds.DEFAULT_LLM)
+                settingsRepository.save(normalizedSettings)
+                credentials.put(CredentialIds.DEFAULT_LLM, newSecret)
+            } catch (error: Throwable) {
+                val settingsRollback = runCatching { settingsRepository.save(previousSettings) }
+                settingsRollback.exceptionOrNull()?.let(error::addSuppressed)
+                if (settingsRollback.isSuccess) {
+                    val credentialRollback = runCatching {
+                        if (previousSecret == null) {
+                            removeCredentialIfPresent(credentials, CredentialIds.DEFAULT_LLM)
+                        } else {
+                            credentials.put(CredentialIds.DEFAULT_LLM, previousSecret)
+                        }
+                    }
+                    credentialRollback.exceptionOrNull()?.let { rollbackError ->
+                        error.addSuppressed(rollbackError)
+                        // The store may have changed before reporting failure. Make
+                        // the connection un-runnable first, then erase any remaining
+                        // credential so no unknown AK can be paired with an endpoint.
+                        runCatching {
+                            settingsRepository.save(disabledLlmSettings(previousSettings))
+                        }.exceptionOrNull()?.let(error::addSuppressed)
+                        runCatching {
+                            removeCredentialIfPresent(credentials, CredentialIds.DEFAULT_LLM)
+                        }.exceptionOrNull()?.let(error::addSuppressed)
+                    }
+                } else {
+                    // If the old destination cannot be restored, fail closed with no
+                    // credential instead of ever pairing its AK with the new endpoint.
+                    runCatching {
+                        removeCredentialIfPresent(credentials, CredentialIds.DEFAULT_LLM)
+                    }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+                throw error
+            }
+        } finally {
+            previousSecret?.fill('\u0000')
+        }
+    }
+}
+
+private fun removeCredentialIfPresent(
+    credentials: SecureCredentialStore,
+    credentialId: String,
+) {
+    if (credentials.contains(credentialId)) credentials.remove(credentialId)
+}
+
+private fun disabledLlmSettings(
+    settings: PocketPilotSettings,
+): PocketPilotSettings = settings.copy(
+    modelName = "",
+    llmProvider = LlmProviderPreference.OPENAI_CHAT,
+    llmProtocol = LlmProtocolPreference.CHAT_COMPLETIONS,
+    llmBaseUrl = "",
+    openAiModelName = "",
+    openAiBaseUrl = "",
+)
+
+internal fun persistNonLlmSettings(
+    requestedSettings: PocketPilotSettings,
+    settingsRepository: SettingsRepository,
+) {
+    synchronized(settingsRepository) {
+        val currentSettings = settingsRepository.load()
+        check(currentSettings.hasSameLlmConnectionAs(requestedSettings)) {
+            "Model connections must be changed through the protected connection flow."
+        }
+        settingsRepository.save(requestedSettings)
+    }
+}
+
+private fun PocketPilotSettings.hasSameLlmConnectionAs(
+    other: PocketPilotSettings,
+): Boolean = modelName == other.modelName &&
+    llmProvider == other.llmProvider &&
+    llmProtocol == other.llmProtocol &&
+    llmBaseUrl == other.llmBaseUrl &&
+    openAiModelName == other.openAiModelName &&
+    openAiBaseUrl == other.openAiBaseUrl
+
+internal fun normalizeLlmConnection(
+    requestedSettings: PocketPilotSettings,
+): PocketPilotSettings {
+    val resolvedBaseUrl = LlmSettingsPolicy.resolveBaseUrl(
+        requestedSettings.llmProvider,
+        requestedSettings.llmBaseUrl,
+    )
+    val normalizedSettings = requestedSettings.copy(
+        modelName = requestedSettings.modelName.trim(),
+        llmProtocol = LlmProtocolPreference.CHAT_COMPLETIONS,
+        llmBaseUrl = resolvedBaseUrl,
+    )
+    LlmEndpointPolicy.resolve(
+        LlmEndpointConfig(
+            protocol = LlmProtocol.CHAT_COMPLETIONS,
+            baseUrl = normalizedSettings.llmBaseUrl,
+            model = normalizedSettings.modelName.trim(),
+            credentialId = CredentialIds.DEFAULT_LLM,
+        ),
+    )
+    return normalizedSettings
 }

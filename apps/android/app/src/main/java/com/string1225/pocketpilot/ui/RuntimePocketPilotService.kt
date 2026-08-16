@@ -63,7 +63,9 @@ class RuntimePocketPilotService(
     private val pluginRuns: PluginRunCoordinationGate,
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean
-        get() = !hasLlmCredential()
+        get() = !hasLlmCredential() || runCatching {
+            normalizeLlmConnection(settings.load())
+        }.isFailure
     override val runtimeAvailable: Boolean = true
     override val pendingApprovals: StateFlow<List<ToolApprovalRequest>> = approvals.requests
 
@@ -120,16 +122,17 @@ class RuntimePocketPilotService(
     override fun loadSettings(): PocketPilotSettings = settings.load()
 
     override fun saveSettings(settings: PocketPilotSettings) {
-        this.settings.save(settings)
+        persistNonLlmSettings(settings, this.settings)
     }
 
     override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
 
-    override fun saveLlmCredential(secret: CharArray) {
-        credentials.put(CredentialIds.DEFAULT_LLM, secret)
-    }
+    override fun saveLlmConnection(settings: PocketPilotSettings, newSecret: CharArray?) =
+        persistLlmConnection(settings, newSecret, this.settings, credentials, pluginRuns)
 
-    override fun removeLlmCredential() = credentials.remove(CredentialIds.DEFAULT_LLM)
+    override fun removeLlmCredential() = pluginRuns.mutate {
+        credentials.remove(CredentialIds.DEFAULT_LLM)
+    }
 
     override fun hasGitCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)
 
@@ -233,11 +236,12 @@ class RuntimePocketPilotService(
                 }
             }
             val provider = if (hasLlmCredential()) {
+                val connection = normalizeLlmConnection(runSettings)
                 JSONObject()
                     .put("type", "openai_compatible")
-                    .put("protocol", runSettings.llmProtocol.value)
-                    .put("baseUrl", runSettings.llmBaseUrl)
-                    .put("model", runSettings.modelName)
+                    .put("protocol", connection.llmProtocol.value)
+                    .put("baseUrl", connection.llmBaseUrl)
+                    .put("model", connection.modelName)
                     .put("credentialId", CredentialIds.DEFAULT_LLM)
             } else {
                 JSONObject().put("type", "offline")

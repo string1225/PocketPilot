@@ -656,23 +656,42 @@ class PocketPilotViewModel(
     fun setLanguage(language: AppLanguage) =
         updateSettings(mutableState.value.settings.copy(language = language))
 
-    fun saveLlmCredential(rawSecret: String) {
-        saveCredential(
-            rawSecret = rawSecret,
-            save = service::saveLlmCredential,
-            onSaved = {
-                mutableState.update {
-                    it.copy(llmCredentialConfigured = true, offlineDemo = service.isOfflineDemo)
+    fun saveLlmConnection(updatedSettings: PocketPilotSettings, rawSecret: String?) {
+        viewModelScope.launch {
+            runOperation {
+                val secret = rawSecret?.takeIf(String::isNotBlank)?.toCharArray()
+                try {
+                    withContext(Dispatchers.IO) {
+                        settingsMutex.withLock {
+                            val currentSettings = service.loadSettings()
+                            service.saveLlmConnection(
+                                currentSettings.copyLlmConnectionFrom(updatedSettings),
+                                secret,
+                            )
+                            val persistedSettings = service.loadSettings()
+                            mutableState.update {
+                                it.copy(
+                                    settings = it.settings.copyLlmConnectionFrom(persistedSettings),
+                                    llmCredentialConfigured = service.hasLlmCredential(),
+                                    offlineDemo = service.isOfflineDemo,
+                                )
+                            }
+                        }
+                    }
+                } finally {
+                    secret?.fill('\u0000')
                 }
-                postNotice(localized("模型密钥已安全保存", "Model credential saved securely"))
-            },
-        )
+                postNotice(localized("模型连接已安全保存", "Model connection saved securely"))
+            }
+        }
     }
 
     fun removeLlmCredential() {
         viewModelScope.launch {
             runOperation {
-                withContext(Dispatchers.IO) { service.removeLlmCredential() }
+                withContext(Dispatchers.IO) {
+                    settingsMutex.withLock { service.removeLlmCredential() }
+                }
                 mutableState.update {
                     it.copy(llmCredentialConfigured = false, offlineDemo = service.isOfflineDemo)
                 }
@@ -1026,6 +1045,17 @@ private data class SelectionContent(
 private data class ConversationTarget(
     val projectId: String,
     val conversationId: String,
+)
+
+private fun PocketPilotSettings.copyLlmConnectionFrom(
+    source: PocketPilotSettings,
+): PocketPilotSettings = copy(
+    modelName = source.modelName,
+    llmProvider = source.llmProvider,
+    llmProtocol = source.llmProtocol,
+    llmBaseUrl = source.llmBaseUrl,
+    openAiModelName = source.openAiModelName,
+    openAiBaseUrl = source.openAiBaseUrl,
 )
 
 private fun defaultConversationTitle(language: AppLanguage): String =

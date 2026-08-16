@@ -27,6 +27,7 @@ import com.string1225.pocketpilot.llm.LlmToolRequestDispatcher
 import com.string1225.pocketpilot.llm.OpenAiCompatibleLlmClient
 import com.string1225.pocketpilot.integrations.http.OkHttpToolExecutor
 import com.string1225.pocketpilot.security.AndroidKeystoreCredentialStore
+import com.string1225.pocketpilot.security.CredentialIds
 import com.string1225.pocketpilot.security.SecureCredentialStore
 import com.string1225.pocketpilot.ui.PocketPilotService
 import com.string1225.pocketpilot.ui.OfflinePocketPilotService
@@ -67,6 +68,9 @@ class PocketPilotApplication : Application() {
         val activeRuns = ActiveRunRegistry()
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
+        settings.migrateLegacyLlmConnection(
+            credentialConfigured = credentialStore.contains(CredentialIds.DEFAULT_LLM),
+        )
         val sshServers = SshServerRepository(database, credentialStore)
         val plugins = PluginRepository(database, File(filesDir, "plugins"))
         val pluginRuns = PluginRunCoordinationGate()

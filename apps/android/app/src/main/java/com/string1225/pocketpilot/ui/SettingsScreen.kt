@@ -50,7 +50,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.string1225.pocketpilot.model.AppLanguage
+import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.LlmProtocolPreference
+import com.string1225.pocketpilot.model.LlmSettingsPolicy
 import com.string1225.pocketpilot.model.InstalledPlugin
 import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.PocketPilotSettings
@@ -72,7 +74,7 @@ fun SettingsScreen(
     remoteServers: List<RemoteServerProfile>,
     plugins: List<InstalledPlugin>,
     onSettingsChange: (PocketPilotSettings) -> Unit,
-    onSaveLlmCredential: (String) -> Unit,
+    onSaveLlmConnection: (PocketPilotSettings, String?) -> Unit,
     onRemoveLlmCredential: () -> Unit,
     onSaveGitCredential: (String) -> Unit,
     onRemoveGitCredential: () -> Unit,
@@ -123,7 +125,8 @@ fun SettingsScreen(
                 SettingsValueRow(
                     icon = Icons.Default.SmartToy,
                     title = ppText(language, "模型", "Model"),
-                    value = "${settings.modelName} · ${settings.llmProtocol.label(language)} · " +
+                    value = "${settings.modelName.ifBlank { ppText(language, "未配置模型", "No model") }} · " +
+                        "${settings.llmProvider.label()} · " +
                         if (llmCredentialConfigured) ppText(language, "已配置密钥", "Key configured")
                         else ppText(language, "未配置密钥", "No key"),
                     onClick = { showModelSettings = true },
@@ -264,8 +267,7 @@ fun SettingsScreen(
             onDismiss = { showModelSettings = false },
             onSave = { updated, secret ->
                 showModelSettings = false
-                onSettingsChange(updated)
-                secret?.takeIf { it.isNotBlank() }?.let(onSaveLlmCredential)
+                onSaveLlmConnection(updated, secret?.takeIf { it.isNotBlank() })
             },
             onRemoveCredential = {
                 showModelSettings = false
@@ -479,12 +481,54 @@ private fun ModelSettingsDialog(
     onRemoveCredential: () -> Unit,
 ) {
     val language = settings.language
-    var protocol by rememberSaveable { mutableStateOf(settings.llmProtocol) }
-    var model by rememberSaveable { mutableStateOf(settings.modelName) }
-    var baseUrl by rememberSaveable { mutableStateOf(settings.llmBaseUrl) }
+    var provider by rememberSaveable { mutableStateOf(settings.llmProvider) }
+    var openAiModel by rememberSaveable {
+        mutableStateOf(
+            settings.openAiModelName.ifBlank {
+                settings.modelName.takeIf {
+                    settings.llmProvider == LlmProviderPreference.OPENAI_CHAT
+                }.orEmpty()
+            },
+        )
+    }
+    var glmModel by rememberSaveable {
+        mutableStateOf(
+            settings.modelName.takeIf { settings.llmProvider == LlmProviderPreference.GLM }
+                ?: LlmProviderPreference.GLM.defaultModel,
+        )
+    }
+    var openAiBaseUrl by rememberSaveable {
+        mutableStateOf(
+            settings.openAiBaseUrl.ifBlank {
+                settings.llmBaseUrl.takeIf {
+                    settings.llmProvider == LlmProviderPreference.OPENAI_CHAT
+                }.orEmpty()
+            },
+        )
+    }
     // Never persist credentials through SavedState/Bundle. This state exists
     // only while the dialog is composed and is cleared before every exit.
     var secret by remember { mutableStateOf("") }
+    val model = when (provider) {
+        LlmProviderPreference.OPENAI_CHAT -> openAiModel
+        LlmProviderPreference.GLM -> glmModel
+    }
+    val resolvedBaseUrl = LlmSettingsPolicy.resolveBaseUrl(provider, openAiBaseUrl)
+    val requiresNewCredential = LlmSettingsPolicy.requiresNewCredential(
+        previousProvider = settings.llmProvider,
+        previousBaseUrl = settings.llmBaseUrl,
+        newProvider = provider,
+        newBaseUrl = resolvedBaseUrl,
+        credentialConfigured = credentialConfigured,
+    )
+    val selectProvider: (LlmProviderPreference) -> Unit = { choice ->
+        if (provider != choice) {
+            provider = choice
+            // A credential is scoped to its provider and endpoint. Clearing the draft
+            // prevents accidentally submitting a key typed for the previous host.
+            secret = ""
+        }
+    }
     val clearAndDismiss = {
         secret = ""
         onDismiss()
@@ -494,35 +538,48 @@ private fun ModelSettingsDialog(
         title = { Text(ppText(language, "模型连接", "Model connection")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(ppText(language, "协议", "Protocol"), style = MaterialTheme.typography.labelLarge)
-                LlmProtocolPreference.entries.forEach { choice ->
+                Text(ppText(language, "模型服务", "Model provider"), style = MaterialTheme.typography.labelLarge)
+                LlmProviderPreference.entries.forEach { choice ->
                     ListItem(
-                        modifier = Modifier.clickable {
-                            protocol = choice
-                            baseUrl = choice.defaultBaseUrl()
-                        },
-                        headlineContent = { Text(choice.label(language)) },
+                        modifier = Modifier.clickable { selectProvider(choice) },
+                        headlineContent = { Text(choice.label()) },
                         leadingContent = {
                             RadioButton(
-                                selected = protocol == choice,
-                                onClick = {
-                                    protocol = choice
-                                    baseUrl = choice.defaultBaseUrl()
-                                },
+                                selected = provider == choice,
+                                onClick = { selectProvider(choice) },
                             )
                         },
                     )
                 }
-                OutlinedTextField(
-                    value = baseUrl,
-                    onValueChange = { baseUrl = it.take(2_048) },
-                    label = { Text("Base URL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (provider.hasEditableBaseUrl) {
+                    OutlinedTextField(
+                        value = openAiBaseUrl,
+                        onValueChange = {
+                            openAiBaseUrl = it.take(2_048)
+                            secret = ""
+                        },
+                        label = { Text(ppText(language, "兼容 API Endpoint", "Compatible API endpoint")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        ppText(
+                            language,
+                            "GLM 使用内置安全 Endpoint，只需填写模型编码和 AK。",
+                            "GLM uses its built-in secure endpoint; enter only the model code and AK.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(
                     value = model,
-                    onValueChange = { model = it.take(160) },
+                    onValueChange = { value ->
+                        when (provider) {
+                            LlmProviderPreference.OPENAI_CHAT -> openAiModel = value.take(128)
+                            LlmProviderPreference.GLM -> glmModel = value.take(128)
+                        }
+                    },
                     label = { Text(ppText(language, "模型编码", "Model code")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -532,10 +589,10 @@ private fun ModelSettingsDialog(
                     onValueChange = { secret = it.take(16_384) },
                     label = {
                         Text(
-                            if (credentialConfigured) {
-                                ppText(language, "新 API Key（留空则不更改）", "New API key (blank keeps current)")
+                            if (credentialConfigured && !requiresNewCredential) {
+                                ppText(language, "新 AK（留空则不更改）", "New AK (blank keeps current)")
                             } else {
-                                "API Key"
+                                "AK / API Key"
                             },
                         )
                     },
@@ -543,19 +600,36 @@ private fun ModelSettingsDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (requiresNewCredential && credentialConfigured) {
+                    Text(
+                        ppText(
+                            language,
+                            "切换模型服务或 Endpoint 后必须重新填写 AK，避免把旧密钥发送到新地址。",
+                            "Re-enter the AK after changing provider or endpoint so an existing key is never sent to a new host.",
+                        ),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = model.isNotBlank() && baseUrl.startsWith("https://"),
+                enabled = model.isNotBlank() &&
+                    (provider == LlmProviderPreference.GLM ||
+                        LlmSettingsPolicy.isValidOpenAiBaseUrl(resolvedBaseUrl)) &&
+                    (!requiresNewCredential || secret.isNotBlank()),
                 onClick = {
                     val submittedSecret = secret.takeIf { it.isNotBlank() }
                     secret = ""
                     onSave(
                         settings.copy(
                             modelName = model.trim(),
-                            llmProtocol = protocol,
-                            llmBaseUrl = baseUrl.trim(),
+                            llmProvider = provider,
+                            llmProtocol = LlmProtocolPreference.CHAT_COMPLETIONS,
+                            llmBaseUrl = resolvedBaseUrl,
+                            openAiModelName = openAiModel.trim(),
+                            openAiBaseUrl = openAiBaseUrl.trim(),
                         ),
                         submittedSecret,
                     )
@@ -1029,14 +1103,9 @@ private fun AppLanguage.label(): String = when (this) {
     AppLanguage.ENGLISH -> "English"
 }
 
-private fun LlmProtocolPreference.label(language: AppLanguage): String = when (this) {
-    LlmProtocolPreference.CHAT_COMPLETIONS -> "Chat Completions"
-    LlmProtocolPreference.RESPONSES -> "Responses"
-}
-
-private fun LlmProtocolPreference.defaultBaseUrl(): String = when (this) {
-    LlmProtocolPreference.CHAT_COMPLETIONS -> "https://open.bigmodel.cn/api/coding/paas/v4"
-    LlmProtocolPreference.RESPONSES -> "https://open.bigmodel.cn/api/v1"
+private fun LlmProviderPreference.label(): String = when (this) {
+    LlmProviderPreference.OPENAI_CHAT -> "OpenAI Chat API"
+    LlmProviderPreference.GLM -> "GLM"
 }
 
 private fun SshAuthType.label(language: AppLanguage): String = when (this) {
