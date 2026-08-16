@@ -13,12 +13,13 @@
   },
   "scripts": {
     "build": "tsc -b && pnpm bundle",
-    "bundle": "esbuild src/global.ts --bundle --format=iife --target=chrome61 --outfile=dist/pocketpilot-runtime.js",
+    "bundle": "esbuild src/global.ts --bundle --format=iife --target=chrome61 --minify --outfile=dist/pocketpilot-runtime.js",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
     "@pocketpilot/agent-core": "workspace:*",
     "@pocketpilot/providers": "workspace:*",
-    "@pocketpilot/tool-runtime": "workspace:*"
+    "@pocketpilot/tool-runtime": "workspace:*",
+    "typescript": "^5.7.3"
   }
 }

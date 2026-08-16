@@ -58,7 +58,7 @@ Projects & conversations <- Chat -> Artifacts
 - 未保存编辑在切项目、Restore、启动 Agent 等冲突动作前阻止覆盖。
 - 通知 deep link 同时携带 projectId/conversationId，冷启动和已有 Activity 都会校验关系后导航。
 
-SQLite v3 主要表：
+SQLite v4 主要表：
 
 ```text
 projects -> conversations -> messages
@@ -67,6 +67,7 @@ projects -> checkpoints -> checkpoint_files
 settings
 git_config
 ssh_servers (credential_id only)
+plugins (manifest metadata + content hash; source stays in private files)
 ```
 
 消息 ID 由时间线事件 ID 直接复用并幂等插入。单个 Run 使用串行 Channel 写 transcript，确保 `user -> assistant/tool/status -> finish` 顺序不会被并发 IO 打乱。
@@ -136,9 +137,21 @@ Android 由 JGit 实现：init/clone/status/diff/commit/pull/push。Repository �
 SSH 仅是 `ssh.execute`，不是远程 Workspace。配置包含 server id、host、port、username、认证方式、固定 `SHA256:` 主机公钥指纹、credential id 和说明。
 
 - 使用 SSHJ 严格 HostKeyVerifier；不接受 TOFU/Promiscuous verifier。
+- `apps/android/sshj-android` 对 SSHJ 0.40.0 做可复现、哈希固定的最小 Android Ed25519 兼容构建；只让 Ed25519 使用未注册的 bundled Provider 实例，不新增、替换或重排进程全局 JCA Provider。
 - 支持密码和未加密 PEM/OpenSSH 私钥；秘密只在一次连接期间短暂解密并清零可擦除缓冲。加密私钥 passphrase 是后续扩展。
 - 命令在进入审批 UI 前做类型、长度、NUL/控制符、timeout 和输出预算校验。
 - stdout/stderr 并发 drain，返回 exitCode；超时返回带截断 partial output 的结构化失败。
+
+### HTTP
+
+`http.request` 支持 GET/HEAD/POST/PUT/PATCH/DELETE，返回 `status/headers/body/bodyEncoding/truncated`。`bodyEncoding` 为 `utf8` 或 `base64`：只有严格合法且不含不可读控制字符的 UTF-8 才作为文本返回，其他二进制正文以 Base64 无损返回。HTTPS GET/HEAD 默认自动执行；写方法需要 Native 逐次审批。明文 HTTP 必须由 Tool 参数显式设置 `allowInsecureHttp=true`，且无论方法都必须审批。
+
+Android manifest 在平台层允许 cleartext，唯一目的是让上述显式 opt-in 可以工作；真正的默认拒绝、逐次审批与目标校验全部由 `HttpToolDispatcher` 执行。WebView Runtime 继续通过 CSP、`blockNetworkLoads` 和 Native Bridge 与网络隔离，LLM/Git 端点仍只允许 HTTPS。
+
+- URL 拒绝 userinfo、fragment、IP literal、本地/元数据主机名；只允许 HTTP(S)。
+- OkHttp 5.3.0 使用自定义 DNS 校验 CNAME 最终地址，并把已校验地址直接交给连接层；混合公网/私网答案整体拒绝，覆盖 loopback、RFC1918、CGNAT、link-local、benchmark、documentation、multicast、unspecified、IPv4-mapped IPv6 等范围。
+- 禁止重定向、自动重试、系统代理和 Cookie；模型只能提供 Accept、Content-Type、If-Match、If-None-Match，不能提供 Host、Authorization、Cookie、Proxy-*、API Key 等敏感头。
+- 请求体、响应体、响应头和总调用时间均有独立上限；取消 Agent Run 会取消进行中的 OkHttp Call。响应只回传固定安全头集合，不回传 Set-Cookie 等凭据载体。
 
 ### 审批
 

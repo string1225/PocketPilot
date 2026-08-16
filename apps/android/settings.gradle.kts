@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "PocketPilotAndroid"
 include(":app")
+include(":sshj-android")

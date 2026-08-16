@@ -51,6 +51,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.LlmProtocolPreference
+import com.string1225.pocketpilot.model.InstalledPlugin
+import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.SshAuthType
@@ -68,6 +70,7 @@ fun SettingsScreen(
     llmCredentialConfigured: Boolean,
     gitCredentialConfigured: Boolean,
     remoteServers: List<RemoteServerProfile>,
+    plugins: List<InstalledPlugin>,
     onSettingsChange: (PocketPilotSettings) -> Unit,
     onSaveLlmCredential: (String) -> Unit,
     onRemoveLlmCredential: () -> Unit,
@@ -75,6 +78,10 @@ fun SettingsScreen(
     onRemoveGitCredential: () -> Unit,
     onSaveRemoteServer: (RemoteServerProfile, String?) -> Unit,
     onDeleteRemoteServer: (String) -> Unit,
+    onPreviewPluginBundle: (String) -> Result<PluginInstallPreview>,
+    onInstallPluginBundle: (String) -> Unit,
+    onSetPluginEnabled: (String, Boolean) -> Unit,
+    onDeletePlugin: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     val language = settings.language
@@ -158,7 +165,12 @@ fun SettingsScreen(
                     icon = Icons.Default.Build,
                     title = ppText(language, "工具", "Tools"),
                     value = if (settings.toolsEnabled) {
-                        ppText(language, "16 个工具已启用", "16 tools enabled")
+                        val pluginTools = plugins.filter { it.enabled }.sumOf { it.tools.size }
+                        ppText(
+                            language,
+                            "内置工具 + $pluginTools 个插件工具",
+                            "Built-in tools + $pluginTools plugin tool(s)",
+                        )
                     } else {
                         ppText(language, "已停用", "Disabled")
                     },
@@ -181,7 +193,15 @@ fun SettingsScreen(
                 SettingsValueRow(
                     icon = Icons.Default.Extension,
                     title = ppText(language, "插件", "Plugins"),
-                    value = ppText(language, "当前未安装插件", "No plugins installed"),
+                    value = if (plugins.isEmpty()) {
+                        ppText(language, "当前未安装插件", "No plugins installed")
+                    } else {
+                        ppText(
+                            language,
+                            "${plugins.count { it.enabled }} / ${plugins.size} 个已启用",
+                            "${plugins.count { it.enabled }} / ${plugins.size} enabled",
+                        )
+                    },
                     onClick = { showPlugins = true },
                 )
             }
@@ -285,14 +305,20 @@ fun SettingsScreen(
         ToolSettingsDialog(
             language = language,
             enabled = settings.toolsEnabled,
+            plugins = plugins,
             onEnabledChange = { onSettingsChange(settings.copy(toolsEnabled = it)) },
             onDismiss = { showTools = false },
         )
     }
 
     if (showPlugins) {
-        PluginInfoDialog(
+        PluginManagerDialog(
             language = language,
+            plugins = plugins,
+            onPreviewBundle = onPreviewPluginBundle,
+            onInstallBundle = onInstallPluginBundle,
+            onSetEnabled = onSetPluginEnabled,
+            onDelete = onDeletePlugin,
             onDismiss = { showPlugins = false },
         )
     }
@@ -697,14 +723,16 @@ private fun RemoteServerEditorDialog(
     var fingerprint by rememberSaveable(initial.id) { mutableStateOf(initial.hostKeyFingerprint) }
     var description by rememberSaveable(initial.id) { mutableStateOf(initial.description) }
     var secret by remember(initial.id) { mutableStateOf("") }
+    var credentialImportError by remember(initial.id) { mutableStateOf<String?>(null) }
     val clearAndDismiss = {
         secret = ""
         onDismiss()
     }
     val parsedPort = port.toIntOrNull()
+    val needsNewCredential = !initial.hasCredential || authType != initial.authType
     val valid = name.isNotBlank() && host.isNotBlank() && username.isNotBlank() &&
         parsedPort != null && parsedPort in 1..65535 && fingerprint.startsWith("SHA256:") &&
-        (initial.hasCredential || secret.isNotBlank())
+        (!needsNewCredential || secret.isNotBlank())
 
     AlertDialog(
         onDismissRequest = clearAndDismiss,
@@ -747,8 +775,15 @@ private fun RemoteServerEditorDialog(
                 item {
                     Row {
                         SshAuthType.entries.forEach { choice ->
-                            TextButton(onClick = { authType = choice }) {
-                                RadioButton(selected = authType == choice, onClick = { authType = choice })
+                            val selectChoice = {
+                                if (authType != choice) {
+                                    secret = ""
+                                    credentialImportError = null
+                                    authType = choice
+                                }
+                            }
+                            TextButton(onClick = selectChoice) {
+                                RadioButton(selected = authType == choice, onClick = selectChoice)
                                 Text(choice.label(language))
                             }
                         }
@@ -765,28 +800,89 @@ private fun RemoteServerEditorDialog(
                     )
                 }
                 item {
-                    OutlinedTextField(
-                        value = secret,
-                        onValueChange = { secret = it.take(16_384) },
-                        label = {
-                            Text(
-                                if (initial.hasCredential) {
-                                    ppText(language, "新凭据（留空不更改）", "New credential (blank keeps current)")
-                                } else if (authType == SshAuthType.PASSWORD) {
-                                    ppText(language, "密码", "Password")
-                                } else {
-                                    ppText(
-                                        language,
-                                        "未加密 PEM/OpenSSH 私钥",
-                                        "Unencrypted PEM/OpenSSH private key",
-                                    )
-                                },
-                            )
-                        },
-                        visualTransformation = PasswordVisualTransformation(),
-                        maxLines = 4,
-                        modifier = Modifier.fillMaxWidth(),
+                    Text(
+                        ppText(
+                            language,
+                            "请从服务器管理员或服务器控制台核对主机指纹。可在服务器执行：ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub。不要仅信任首次连接弹出的指纹。",
+                            "Verify the host fingerprint with the server administrator or console. On the server, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Do not trust a fingerprint shown only by the first connection attempt.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
                     )
+                }
+                if (authType == SshAuthType.PASSWORD) {
+                    item {
+                        OutlinedTextField(
+                            value = secret,
+                            onValueChange = { secret = it.take(16_384) },
+                            label = {
+                                Text(
+                                    if (initial.hasCredential) {
+                                        ppText(
+                                            language,
+                                            "新密码（留空不更改）",
+                                            "New password (blank keeps current)",
+                                        )
+                                    } else {
+                                        ppText(language, "密码", "Password")
+                                    },
+                                )
+                            },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                if (authType == SshAuthType.PRIVATE_KEY) {
+                    item {
+                        SshPrivateKeyImportButton(
+                            language = language,
+                            onImported = { imported ->
+                                secret = imported
+                                credentialImportError = null
+                            },
+                            onError = { credentialImportError = it },
+                        )
+                    }
+                    item {
+                        Text(
+                            ppText(
+                                language,
+                                "请选择私钥文件（例如 id_ed25519），不要选择 .pub 公钥。当前支持未加密的 OpenSSH/PEM 私钥；导入后文件内容只会进入 Android Keystore 加密存储。",
+                                "Choose the private key file (for example, id_ed25519), not the .pub public key. This version supports unencrypted OpenSSH/PEM private keys; imported content is stored only through Android Keystore encryption.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (secret.isNotEmpty()) {
+                        item {
+                            Text(
+                                ppText(
+                                    language,
+                                    "已选择一份通过格式与未加密检查的私钥。保存后仍需实际连接验证。",
+                                    "A private key passed the format and unencrypted-key checks. Verify it with a real connection after saving.",
+                                ),
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        Text(
+                            ppText(
+                                language,
+                                "输入服务器 IP/域名、端口、用户名和密码。密码不会写入项目或 SQLite 明文字段。",
+                                "Enter the server IP/hostname, port, username, and password. The password is never written to the project or plaintext SQLite fields.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                credentialImportError?.let { message ->
+                    item {
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 item {
                     OutlinedTextField(
@@ -830,19 +926,29 @@ private fun RemoteServerEditorDialog(
 private fun ToolSettingsDialog(
     language: AppLanguage,
     enabled: Boolean,
+    plugins: List<InstalledPlugin>,
     onEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val groups = listOf(
-        "Workspace" to listOf(
-            "workspace.list", "workspace.read", "workspace.write", "workspace.create",
-            "workspace.delete", "workspace.move", "workspace.search", "workspace.patch",
-        ),
-        "Git" to listOf(
-            "git.init", "git.clone", "git.status", "git.diff", "git.commit", "git.pull", "git.push",
-        ),
-        "SSH" to listOf("ssh.execute"),
-    )
+    val groups = buildList {
+        add(
+            "Workspace" to listOf(
+                "workspace.list", "workspace.read", "workspace.write", "workspace.create",
+                "workspace.delete", "workspace.move", "workspace.search", "workspace.patch",
+            ),
+        )
+        add(
+            "Git" to listOf(
+                "git.init", "git.clone", "git.status", "git.diff", "git.commit", "git.pull", "git.push",
+            ),
+        )
+        add("Network" to listOf("http.request"))
+        add("Sandbox" to listOf("execute_js", "execute_ts"))
+        add("SSH" to listOf("ssh.execute"))
+        val pluginTools = plugins.filter(InstalledPlugin::enabled)
+            .flatMap { plugin -> plugin.tools.map { tool -> "plugin.${plugin.id}.${tool.name}" } }
+        if (pluginTools.isNotEmpty()) add("Plugins" to pluginTools)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(ppText(language, "工具列表", "Tools")) },

@@ -157,9 +157,50 @@ data class PocketPilotSettings(
     val personalization: String = "",
     val memoryEnabled: Boolean = true,
     val toolsEnabled: Boolean = true,
-    val pluginsEnabled: Boolean = false,
     val theme: ThemePreference = ThemePreference.SYSTEM,
     val language: AppLanguage = AppLanguage.CHINESE,
+)
+
+enum class PluginToolRisk(val value: String) {
+    READ("read"),
+    WRITE("write"),
+    NETWORK("network"),
+    REMOTE("remote");
+
+    companion object {
+        fun fromValue(value: String): PluginToolRisk =
+            entries.firstOrNull { it.value == value }
+                ?: throw IllegalArgumentException("Unsupported plugin tool risk: $value")
+    }
+}
+
+data class PluginToolManifest(
+    val name: String,
+    val description: String,
+    val inputSchemaJson: String,
+    val risk: PluginToolRisk,
+)
+
+data class InstalledPlugin(
+    val id: String,
+    val name: String,
+    val version: String,
+    val description: String,
+    val sourceSha256: String,
+    val tools: List<PluginToolManifest>,
+    val enabled: Boolean,
+    val installedAt: Long,
+    val updatedAt: Long,
+)
+
+data class PluginInstallPreview(
+    val plugin: InstalledPlugin,
+    val sourceSizeBytes: Int,
+)
+
+data class RuntimePluginPackage(
+    val plugin: InstalledPlugin,
+    val source: String,
 )
 
 data class ToolApprovalRequest(

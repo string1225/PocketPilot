@@ -4,7 +4,10 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-class PocketPilotDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+class PocketPilotDatabase(
+    context: Context,
+    databaseName: String = DATABASE_NAME,
+) : SQLiteOpenHelper(context, databaseName, null, DATABASE_VERSION) {
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
@@ -120,6 +123,7 @@ class PocketPilotDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE
         )
 
         createConversationAndSettingsTables(db)
+        createPluginTables(db)
 
         db.execSQL("CREATE INDEX idx_checkpoints_project_time ON checkpoints(project_id, created_at DESC)")
         db.execSQL("CREATE INDEX idx_agent_runs_project_time ON agent_runs(project_id, started_at DESC)")
@@ -141,6 +145,9 @@ class PocketPilotDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE
                 "UPDATE ssh_servers SET credential_id = 'ssh.' || id " +
                     "WHERE credential_id IS NULL OR credential_id = ''",
             )
+        }
+        if (oldVersion < 4) {
+            createPluginTables(db)
         }
         check(newVersion <= DATABASE_VERSION) {
             "Database version $newVersion is newer than supported version $DATABASE_VERSION"
@@ -194,8 +201,30 @@ class PocketPilotDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE
         )
     }
 
+    private fun createPluginTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS plugins (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                description TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+                source_sha256 TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                installed_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_plugins_enabled_name " +
+                "ON plugins(enabled, name COLLATE NOCASE)",
+        )
+    }
+
     companion object {
         private const val DATABASE_NAME = "pocketpilot.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
     }
 }

@@ -68,15 +68,21 @@ class SshServerRepository(
             "A new SSH credential is required when authentication type changes"
         }
 
-        val hadCredential = credentials.contains(profile.credentialId)
-        val previousSecret = if (secret != null && hadCredential) credentials.get(profile.credentialId) else null
-        val storedSecret = secret?.let {
-            when (profile.authType) {
-                SshAuthType.PASSWORD -> it.copyOf()
-                SshAuthType.PRIVATE_KEY -> SshStoredCredentialCodec.encodePrivateKey(it)
-            }
-        }
+        var previousSecret: CharArray? = null
+        var storedSecret: CharArray? = null
         try {
+            val hadCredential = credentials.contains(profile.credentialId)
+            previousSecret = if (secret != null && hadCredential) {
+                credentials.get(profile.credentialId)
+            } else {
+                null
+            }
+            storedSecret = secret?.let {
+                when (profile.authType) {
+                    SshAuthType.PASSWORD -> it.copyOf()
+                    SshAuthType.PRIVATE_KEY -> SshStoredCredentialCodec.encodePrivateKey(it)
+                }
+            }
             if (storedSecret != null) credentials.put(profile.credentialId, storedSecret)
             require(credentials.contains(profile.credentialId)) { "SSH credential is required" }
             check(

@@ -12,6 +12,8 @@ import { AllowAllPermissionPolicy, ToolRegistry } from "@pocketpilot/tool-runtim
 
 import { NativeRpcLlmTransport } from "./llm-transport.js";
 import { createNativeWorkspaceTools, NativeRpcClient } from "./native-rpc.js";
+import { createPluginTools } from "./plugin-tools.js";
+import { createScriptTools, WorkerSandbox } from "./sandbox.js";
 import {
   ANDROID_BRIDGE_VERSION,
   parseRuntimeStartRequest,
@@ -22,6 +24,7 @@ import {
 export interface AndroidAgentRuntimeOptions {
   readonly postMessage: (envelopeJson: string) => void;
   readonly providerFactory?: (request: RuntimeStartRequest) => AgentProvider;
+  readonly sandbox?: WorkerSandbox;
 }
 
 interface ActiveRun {
@@ -49,11 +52,13 @@ export class AndroidAgentRuntime {
   readonly #postMessage: (envelopeJson: string) => void;
   readonly #providerFactory: (request: RuntimeStartRequest) => AgentProvider;
   readonly #rpc: NativeRpcClient;
+  readonly #sandbox: WorkerSandbox;
   readonly #runs = new Map<string, ActiveRun>();
 
   public constructor(options: AndroidAgentRuntimeOptions) {
     this.#postMessage = options.postMessage;
     this.#rpc = new NativeRpcClient({ postMessage: options.postMessage });
+    this.#sandbox = options.sandbox ?? new WorkerSandbox();
     this.#providerFactory = options.providerFactory ?? ((request) => {
       const provider = request.provider;
       if (provider === undefined || provider.type === "offline") {
@@ -80,11 +85,16 @@ export class AndroidAgentRuntime {
     const controller = new AbortController();
     // Android Native owns the user-visible, per-call approval UI. Allow the
     // bridge request through here so network/remote calls can reach that gate.
+    const enabledTools = request.toolsEnabled === false
+      ? []
+      : [
+          ...createNativeWorkspaceTools(this.#rpc),
+          ...createScriptTools(this.#sandbox),
+          ...createPluginTools(request.plugins ?? [], this.#sandbox)
+        ];
     const registry = new ToolRegistry({
       permissionPolicy: new AllowAllPermissionPolicy()
-    }).registerAll(
-      request.toolsEnabled === false ? [] : createNativeWorkspaceTools(this.#rpc),
-    );
+    }).registerAll(enabledTools);
     const runner = new DefaultAgentRunner({
       provider: this.#providerFactory(request),
       tools: registry,

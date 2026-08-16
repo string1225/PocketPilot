@@ -23,7 +23,6 @@ class SettingsRepository(
             personalization = get(KEY_PERSONALIZATION).orEmpty(),
             memoryEnabled = getBoolean(KEY_MEMORY_ENABLED, true),
             toolsEnabled = getBoolean(KEY_TOOLS_ENABLED, true),
-            pluginsEnabled = getBoolean(KEY_PLUGINS_ENABLED, false),
             theme = ThemePreference.fromValue(get(KEY_THEME).orEmpty()),
             language = AppLanguage.fromValue(get(KEY_LANGUAGE).orEmpty()),
         )
@@ -42,7 +41,6 @@ class SettingsRepository(
             KEY_PERSONALIZATION to settings.personalization.trim(),
             KEY_MEMORY_ENABLED to settings.memoryEnabled.toString(),
             KEY_TOOLS_ENABLED to settings.toolsEnabled.toString(),
-            KEY_PLUGINS_ENABLED to settings.pluginsEnabled.toString(),
             KEY_THEME to settings.theme.value,
             KEY_LANGUAGE to settings.language.value,
         )
@@ -97,7 +95,6 @@ class SettingsRepository(
         const val KEY_PERSONALIZATION = "personalization"
         const val KEY_MEMORY_ENABLED = "memory_enabled"
         const val KEY_TOOLS_ENABLED = "tools_enabled"
-        const val KEY_PLUGINS_ENABLED = "plugins_enabled"
         const val KEY_THEME = "theme"
         const val KEY_LANGUAGE = "language"
     }

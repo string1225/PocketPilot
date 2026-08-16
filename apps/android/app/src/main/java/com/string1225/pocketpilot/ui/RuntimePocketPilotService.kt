@@ -4,6 +4,7 @@ import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.ProjectRepository
+import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
@@ -14,6 +15,8 @@ import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.InstalledPlugin
+import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
@@ -27,6 +30,7 @@ import com.string1225.pocketpilot.runtime.ActiveRunRegistry
 import com.string1225.pocketpilot.runtime.RuntimeBridgeError
 import com.string1225.pocketpilot.runtime.RuntimeEventRouter
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
+import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import java.io.Closeable
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -55,6 +59,8 @@ class RuntimePocketPilotService(
     private val settings: SettingsRepository,
     private val credentials: SecureCredentialStore,
     private val sshServers: SshServerRepository,
+    private val plugins: PluginRepository,
+    private val pluginRuns: PluginRunCoordinationGate,
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean
         get() = !hasLlmCredential()
@@ -142,6 +148,19 @@ class RuntimePocketPilotService(
 
     override fun deleteRemoteServer(serverId: String) = sshServers.delete(serverId)
 
+    override fun listPlugins(): List<InstalledPlugin> = plugins.list()
+
+    override fun previewPluginBundle(bundleJson: String): PluginInstallPreview =
+        plugins.previewBundle(bundleJson)
+
+    override fun installPluginBundle(bundleJson: String): InstalledPlugin =
+        pluginRuns.mutate { plugins.installBundle(bundleJson) }
+
+    override fun setPluginEnabled(pluginId: String, enabled: Boolean): InstalledPlugin =
+        pluginRuns.mutate { plugins.setEnabled(pluginId, enabled) }
+
+    override fun deletePlugin(pluginId: String) = pluginRuns.mutate { plugins.delete(pluginId) }
+
     override suspend fun listFiles(projectId: String): List<WorkspaceEntry> = workspace.list(projectId)
 
     override suspend fun readFile(projectId: String, path: String): String = workspace.read(projectId, path)
@@ -176,6 +195,7 @@ class RuntimePocketPilotService(
         var runCreated = false
         var registered = false
         var runtimeStarted = false
+        pluginRuns.beginRun(runId)
 
         return try {
             agentRuns.create(projectId, task, requestedId = runId)
@@ -232,6 +252,10 @@ class RuntimePocketPilotService(
                     .put("systemPrompt", buildSystemPrompt(runSettings.personalization))
                     .put("messages", history)
                     .put("toolsEnabled", runSettings.toolsEnabled)
+                    .put(
+                        "plugins",
+                        if (runSettings.toolsEnabled) runtimePluginsJson() else JSONArray(),
+                    )
                     .toString(),
             )
             runtimeStarted = true
@@ -270,6 +294,7 @@ class RuntimePocketPilotService(
             approvals.cancelRun(runId)
             if (registered) activeRuns.revoke(runId, projectId)
             if (registered || runtimeStarted) runtime.finishRun(runId)
+            pluginRuns.finishRun(runId)
         }
     }
 
@@ -285,6 +310,35 @@ class RuntimePocketPilotService(
 
     override fun resolveApproval(requestId: String, approved: Boolean): Boolean =
         approvals.resolve(requestId, approved)
+
+    private fun runtimePluginsJson(): JSONArray = JSONArray().apply {
+        plugins.loadEnabledRuntimePackages().forEach { runtimePackage ->
+            val plugin = runtimePackage.plugin
+            put(
+                JSONObject()
+                    .put("id", plugin.id)
+                    .put("name", plugin.name)
+                    .put("version", plugin.version)
+                    .put("description", plugin.description)
+                    .put("sourceSha256", plugin.sourceSha256)
+                    .put("source", runtimePackage.source)
+                    .put(
+                        "tools",
+                        JSONArray().apply {
+                            plugin.tools.forEach { tool ->
+                                put(
+                                    JSONObject()
+                                        .put("name", tool.name)
+                                        .put("description", tool.description)
+                                        .put("risk", tool.risk.value)
+                                        .put("inputSchema", JSONObject(tool.inputSchemaJson)),
+                                )
+                            }
+                        },
+                    ),
+            )
+        }
+    }
 
     private fun buildSystemPrompt(personalization: String): String = buildString {
         append(

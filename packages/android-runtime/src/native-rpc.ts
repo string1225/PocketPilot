@@ -400,6 +400,59 @@ const sshExecuteSchema = objectSchema(
   ["server", "command"],
 );
 
+const httpHeaderValueSchema: JsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^[^\\r\\n\\u0000]+$",
+  description: "A bounded HTTP header value without control or Unicode formatting characters."
+};
+
+const httpRequestSchema = objectSchema(
+  {
+    method: {
+      type: "string",
+      enum: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+      default: "GET"
+    },
+    url: {
+      type: "string",
+      minLength: 1,
+      maxLength: 4_096,
+      description: "An absolute public HTTP(S) URL. HTTPS is required unless allowInsecureHttp is explicitly true; credentials, fragments, IP literals, and private-network targets are forbidden."
+    },
+    headers: objectSchema({
+      Accept: httpHeaderValueSchema,
+      "Content-Type": httpHeaderValueSchema,
+      "If-Match": httpHeaderValueSchema,
+      "If-None-Match": httpHeaderValueSchema
+    }),
+    body: {
+      type: "string",
+      maxLength: 262_144,
+      description: "Optional UTF-8 request body. GET and HEAD requests cannot include a body."
+    },
+    timeoutMillis: {
+      type: "integer",
+      minimum: 1_000,
+      maximum: 120_000,
+      default: 30_000
+    },
+    maxResponseBytes: {
+      type: "integer",
+      minimum: 1,
+      maximum: 524_288,
+      default: 262_144
+    },
+    allowInsecureHttp: {
+      type: "boolean",
+      default: false,
+      description: "Explicitly opt in to cleartext HTTP. Every cleartext request still requires native user approval."
+    }
+  },
+  ["url"],
+);
+
 const nativeTool = (
   rpc: NativeRpcClient,
   name: string,
@@ -432,5 +485,6 @@ export const createNativeWorkspaceTools = (
   nativeTool(rpc, "git.commit", "Stage changes and create a Git commit after native approval.", "write", gitSchemas.commit),
   nativeTool(rpc, "git.pull", "Pull from an HTTPS Git remote after native approval; timeoutMillis is in milliseconds.", "network", gitSchemas.pull),
   nativeTool(rpc, "git.push", "Push to an HTTPS Git remote after native approval and return bounded update metadata; timeoutMillis is in milliseconds.", "network", gitSchemas.push),
+  nativeTool(rpc, "http.request", "Send one bounded request to a public HTTP(S) endpoint and return status, safe response headers, body, bodyEncoding (utf8 or base64), and truncated. GET/HEAD over HTTPS run automatically; mutating methods and every cleartext request require native approval. Authentication headers and private-network targets are forbidden.", "network", httpRequestSchema),
   nativeTool(rpc, "ssh.execute", "Execute one command after native approval; timeoutMillis is in milliseconds.", "remote", sshExecuteSchema)
 ];

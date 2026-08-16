@@ -58,7 +58,8 @@ dependencies {
     // Pure-Java implementations keep Git and SSH available on Android without
     // relying on binaries provided by the device image.
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.5.202508271544-r")
-    implementation("com.hierynomus:sshj:0.40.0")
+    implementation(project(":sshj-android"))
+    implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

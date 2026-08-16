@@ -5,3 +5,4 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 apps/android/gradlew text eol=lf
+apps/android/sshj-android/*.txt text eol=lf

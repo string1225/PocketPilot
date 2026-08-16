@@ -10,7 +10,7 @@ Compose Chat
   -> TypeScript Agent Loop
   -> OpenAI-compatible LLM (Chat Completions / Responses)
   -> Native Tool approval boundary
-  -> Workspace / Checkpoint / JGit / SSHJ
+  -> Workspace / Checkpoint / HTTP / JGit / SSHJ
 ```
 
 ## 当前可用
@@ -23,6 +23,9 @@ Compose Chat
 - Agent Run 由 Application 级 Coordinator 管理；离开 Activity 后由前台服务继续，结束、失败或取消后发通知，点击通知回到对应项目和会话。
 - Workspace 八个工具、自动 Checkpoint、Diff 与 Restore。
 - JGit：init、clone、status、diff、commit、pull、push。
+- HTTP：对公网 HTTP(S) 发起有超时和正文上限的请求；禁用重定向，拒绝 IP literal、内网/回环/链路本地/元数据地址及敏感请求头，二进制响应以 Base64 无损返回。
+- 沙箱脚本：`execute_js` 与 `execute_ts` 在一次性 Web Worker 中运行，隔离 Native Bridge、网络、文件和凭据，并限制执行时间及输入输出。
+- 本地插件：导入带清单和源码 SHA-256 的 JSON bundle，预览后安装、默认停用、二次确认启用；首版只允许沙箱内纯计算的 `read` 工具。
 - SSHJ：固定主机公钥指纹验证、密码或未加密 PEM/OpenSSH 私钥认证、命令超时和输出上限。
 - 没有配置 LLM Key 时自动使用离线命令 Provider，可在模拟器或真机上验证完整 Agent/Tool 链路。
 
@@ -57,7 +60,7 @@ pnpm check
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 Push-Location apps\android
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+.\gradlew.bat :sshj-android:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 Pop-Location
 ```
 
@@ -67,14 +70,14 @@ Pop-Location
 apps/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-GitHub Actions 在 `dev` 与 `main` 上重复上述验证并上传 7 天有效的 Debug APK artifact。
+GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模拟器执行 instrumentation tests，并上传 7 天有效的 Debug APK artifact。
 
 ## 首次运行
 
 1. 打开左上角设置。
 2. 在“模型”中选择 Chat Completions 或 Responses，核对 Endpoint 和模型编码，然后在设备上录入 API Key。
 3. 如需私有 HTTPS Git，在“Git HTTPS 凭据”录入低权限 Token。
-4. 如需 SSH，添加服务器，填写服务器公钥的 `SHA256:` 指纹，并录入密码或 OpenSSH 私钥。
+4. 如需 SSH，添加服务器，填写服务器公钥的 `SHA256:` 指纹，并录入密码或通过系统文件选择器导入 OpenSSH/PEM 私钥。
 5. 返回聊天输入任务；需要远端副作用时，在审批框核对完整目标和操作。
 
 仓库不会附带任何默认 API Key。开发、截图和日志分享时不要使用生产凭据。
@@ -99,6 +102,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证并上传 7 天有效�
 
 - [技术规划与实施方案](docs/TECHNICAL_PLAN.md)
 - [Android 模拟器、USB/无线真机接入与测试指南](docs/PHONE_TESTING.md)
+- [HTTP、沙箱脚本、插件包与 SSH 配置](docs/TOOLS_AND_PLUGINS.md)
 
 ## 分支与提交
 

@@ -310,6 +310,7 @@ describe("Android runtime bridge", () => {
       ["git.commit", "write"],
       ["git.pull", "network"],
       ["git.push", "network"],
+      ["http.request", "network"],
       ["ssh.execute", "remote"]
     ]);
     for (const schema of schemas.values()) {
@@ -356,6 +357,31 @@ describe("Android runtime bridge", () => {
         maxOutputBytes: { type: "integer", minimum: 1, maximum: 524_288, default: 524_288 }
       }
     });
+    expect(schemas.get("http.request")).toMatchObject({
+      required: ["url"],
+      additionalProperties: false,
+      properties: {
+        method: { enum: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], default: "GET" },
+        url: { type: "string", minLength: 1, maxLength: 4_096 },
+        headers: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            Accept: { type: "string" },
+            "Content-Type": { type: "string" },
+            "If-Match": { type: "string" },
+            "If-None-Match": { type: "string" }
+          }
+        },
+        body: { type: "string", maxLength: 262_144 },
+        timeoutMillis: { type: "integer", minimum: 1_000, maximum: 120_000, default: 30_000 },
+        maxResponseBytes: { type: "integer", minimum: 1, maximum: 524_288, default: 262_144 },
+        allowInsecureHttp: { type: "boolean", default: false }
+      }
+    });
+    expect(tools.find(({ name }) => name === "http.request")?.description).toContain(
+      "bodyEncoding (utf8 or base64)",
+    );
     expect(schemas.get("git.clone")).toMatchObject({
       properties: {
         timeoutMillis: {
@@ -368,7 +394,7 @@ describe("Android runtime bridge", () => {
       }
     });
 
-    for (const name of ["git.clone", "git.pull", "git.push", "ssh.execute"]) {
+    for (const name of ["git.clone", "git.pull", "git.push", "http.request", "ssh.execute"]) {
       const properties = schemas.get(name)?.properties;
       expect(properties).toHaveProperty("timeoutMillis");
       expect(properties).not.toHaveProperty("timeout");

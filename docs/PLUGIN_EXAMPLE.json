@@ -1,0 +1,32 @@
+{
+  "manifest": {
+    "manifestVersion": 1,
+    "id": "com.pocketpilot.text",
+    "name": "PocketPilot Text Utilities",
+    "version": "1.0.0",
+    "description": "A minimal, pure-computation plugin example for local text statistics.",
+    "sourceSha256": "55e66d67b8196a0a0e26857cd0f44001a5df7c4b50bdc349aad55f97dbf8ba73",
+    "tools": [
+      {
+        "name": "text_stats",
+        "description": "Count Unicode code points, lines, and whitespace-delimited words in text.",
+        "risk": "read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text to inspect.",
+              "maxLength": 20000
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "source": "async (toolName, input) => { if (toolName !== \"text_stats\") throw new Error(\"Unknown tool\"); const text = input.text; const trimmed = text.trim(); return { codePoints: Array.from(text).length, lines: text.length === 0 ? 0 : text.split(/\\r?\\n/u).length, words: trimmed.length === 0 ? 0 : trimmed.split(/\\s+/u).length }; }"
+}

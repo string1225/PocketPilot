@@ -2,12 +2,14 @@ package com.string1225.pocketpilot.integrations.ssh
 
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import java.security.Security
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import net.schmizz.sshj.DefaultConfig
 
 class SshSecurityTest {
     @Test
@@ -128,6 +130,82 @@ class SshSecurityTest {
         assertFailsWith<IllegalArgumentException> { executor.execute(server, "true", timeoutMillis = 0) }
         assertFailsWith<IllegalArgumentException> { executor.execute(server, "true", maxOutputBytes = 0) }
         assertFalse(resolved)
+    }
+
+    @Test
+    fun `client config excludes unavailable Curve25519 and legacy key exchanges`() {
+        val config = SshjClientConfigFactory.create(
+            x25519Available = false,
+            ecdhAvailable = true,
+        )
+        val names = config.keyExchangeFactories.map { it.name }
+
+        assertFalse(names.any { it.startsWith("curve25519-") })
+        assertFalse(names.contains("diffie-hellman-group-exchange-sha1"))
+        assertFalse(names.contains("diffie-hellman-group1-sha1"))
+        assertFalse(names.contains("diffie-hellman-group14-sha1"))
+        assertTrue(names.contains("diffie-hellman-group-exchange-sha256"))
+        assertTrue(names.contains("ecdh-sha2-nistp256"))
+        assertTrue(names.contains("diffie-hellman-group14-sha256"))
+    }
+
+    @Test
+    fun `client config retains Curve25519 only when its SSHJ primitives are available`() {
+        val availableNames = SshjClientConfigFactory.create(
+            x25519Available = true,
+            ecdhAvailable = true,
+        )
+            .keyExchangeFactories
+            .map { it.name }
+        val unavailableNames = SshjClientConfigFactory.create(
+            x25519Available = false,
+            ecdhAvailable = true,
+        )
+            .keyExchangeFactories
+            .map { it.name }
+
+        assertTrue(availableNames.contains("curve25519-sha256"))
+        assertFalse(unavailableNames.contains("curve25519-sha256"))
+        assertTrue(unavailableNames.isNotEmpty())
+    }
+
+    @Test
+    fun `client config excludes ECDH when EC primitives are unavailable`() {
+        val names = SshjClientConfigFactory.create(
+            x25519Available = false,
+            ecdhAvailable = false,
+        ).keyExchangeFactories.map { it.name }
+
+        assertFalse(names.any { it.startsWith("ecdh-sha2-") })
+        assertTrue(names.contains("diffie-hellman-group-exchange-sha256"))
+        assertTrue(names.contains("diffie-hellman-group14-sha256"))
+        assertTrue(names.contains("diffie-hellman-group16-sha512"))
+        assertTrue(names.contains("diffie-hellman-group18-sha512"))
+    }
+
+    @Test
+    fun `client config uses default JCA lookup without changing provider registration`() {
+        val providersBefore = Security.getProviders().map { it.name }
+
+        SshjClientConfigFactory.create()
+        val digest = net.schmizz.sshj.common.SecurityUtils.getMessageDigest("SHA-256")
+
+        assertEquals(providersBefore, Security.getProviders().map { it.name })
+        assertEquals(32, digest.digest("probe".toByteArray()).size)
+        assertEquals(null, net.schmizz.sshj.common.SecurityUtils.getSecurityProvider())
+    }
+
+    @Test
+    fun `client config fails closed when no secure key exchange remains`() {
+        assertFailsWith<IllegalStateException> {
+            SshjClientConfigFactory.secureKeyExchangeFactories(
+                candidates = DefaultConfig().keyExchangeFactories.filter {
+                    it.name == "diffie-hellman-group1-sha1"
+                },
+                x25519Available = false,
+                ecdhAvailable = false,
+            )
+        }
     }
 
     private fun validServer(

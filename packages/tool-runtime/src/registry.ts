@@ -115,6 +115,9 @@ export class ToolRegistry {
     if (decision.outcome === "require_approval") {
       return toolFailure("APPROVAL_REQUIRED", decision.reason);
     }
+    if (context.signal.aborted) {
+      return toolFailure("CANCELLED", "Tool execution was cancelled.");
+    }
 
     this.#emit({ type: "tool.started", name, input, context });
 

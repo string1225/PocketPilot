@@ -6,6 +6,7 @@ import com.string1225.pocketpilot.integrations.ssh.SshStoredCredentialCodec
 import com.string1225.pocketpilot.model.SshAuthType
 import com.string1225.pocketpilot.security.SecureCredentialStore
 import java.util.Base64
+import java.util.UUID
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -18,8 +19,8 @@ class SshServerRepositoryTest {
     @Test
     fun privateKeyStorageAndCrossStoreFailuresAreCompensated() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        context.deleteDatabase(DATABASE_NAME)
-        val database = PocketPilotDatabase(context)
+        val databaseName = "ssh-server-test-${UUID.randomUUID()}.db"
+        val database = PocketPilotDatabase(context, databaseName)
         val credentials = SingleLineCredentialStore()
         val repository = SshServerRepository(database, credentials)
         val profile = repository.newProfile(
@@ -77,7 +78,7 @@ class SshServerRepositoryTest {
             replacement.fill('\u0000')
             credentials.clear()
             database.close()
-            context.deleteDatabase(DATABASE_NAME)
+            context.deleteDatabase(databaseName)
         }
     }
 
@@ -109,9 +110,5 @@ class SshServerRepositoryTest {
             values.values.forEach { it.fill('\u0000') }
             values.clear()
         }
-    }
-
-    private companion object {
-        const val DATABASE_NAME = "pocketpilot.db"
     }
 }

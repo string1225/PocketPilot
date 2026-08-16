@@ -4,6 +4,7 @@ import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.ProjectRepository
+import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
@@ -14,6 +15,8 @@ import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.InstalledPlugin
+import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
@@ -21,6 +24,7 @@ import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
 import com.string1225.pocketpilot.security.CredentialIds
 import com.string1225.pocketpilot.security.SecureCredentialStore
+import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,6 +74,11 @@ interface PocketPilotService {
     fun listRemoteServers(): List<RemoteServerProfile>
     fun saveRemoteServer(profile: RemoteServerProfile, secret: CharArray?): RemoteServerProfile
     fun deleteRemoteServer(serverId: String)
+    fun listPlugins(): List<InstalledPlugin>
+    fun previewPluginBundle(bundleJson: String): PluginInstallPreview
+    fun installPluginBundle(bundleJson: String): InstalledPlugin
+    fun setPluginEnabled(pluginId: String, enabled: Boolean): InstalledPlugin
+    fun deletePlugin(pluginId: String)
 
     suspend fun listFiles(projectId: String): List<WorkspaceEntry>
     suspend fun readFile(projectId: String, path: String): String
@@ -105,6 +114,8 @@ class OfflinePocketPilotService(
     private val settings: SettingsRepository,
     private val credentials: SecureCredentialStore,
     private val sshServers: SshServerRepository,
+    private val plugins: PluginRepository,
+    private val pluginRuns: PluginRunCoordinationGate,
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean = true
     override val runtimeAvailable: Boolean = false
@@ -196,6 +207,19 @@ class OfflinePocketPilotService(
 
     override fun deleteRemoteServer(serverId: String) = sshServers.delete(serverId)
 
+    override fun listPlugins(): List<InstalledPlugin> = plugins.list()
+
+    override fun previewPluginBundle(bundleJson: String): PluginInstallPreview =
+        plugins.previewBundle(bundleJson)
+
+    override fun installPluginBundle(bundleJson: String): InstalledPlugin =
+        pluginRuns.mutate { plugins.installBundle(bundleJson) }
+
+    override fun setPluginEnabled(pluginId: String, enabled: Boolean): InstalledPlugin =
+        pluginRuns.mutate { plugins.setEnabled(pluginId, enabled) }
+
+    override fun deletePlugin(pluginId: String) = pluginRuns.mutate { plugins.delete(pluginId) }
+
     override suspend fun listFiles(projectId: String): List<WorkspaceEntry> = workspace.list(projectId)
 
     override suspend fun readFile(projectId: String, path: String): String = workspace.read(projectId, path)
@@ -225,8 +249,9 @@ class OfflinePocketPilotService(
         task: String,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus {
-        activeRuns += runId
+        pluginRuns.beginRun(runId)
         return try {
+            activeRuns += runId
             agentRuns.create(projectId, task, requestedId = runId)
             agentRuns.appendEvent(runId, "user.message", task)
             emit(
@@ -278,6 +303,7 @@ class OfflinePocketPilotService(
             AgentRunStatus.FAILED
         } finally {
             activeRuns -= runId
+            pluginRuns.finishRun(runId)
         }
     }
 

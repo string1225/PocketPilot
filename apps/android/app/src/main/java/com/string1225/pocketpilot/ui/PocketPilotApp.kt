@@ -108,6 +108,7 @@ fun PocketPilotApp(viewModel: PocketPilotViewModel) {
                 llmCredentialConfigured = state.llmCredentialConfigured,
                 gitCredentialConfigured = state.gitCredentialConfigured,
                 remoteServers = state.remoteServers,
+                plugins = state.plugins,
                 onSettingsChange = viewModel::updateSettings,
                 onSaveLlmCredential = viewModel::saveLlmCredential,
                 onRemoveLlmCredential = viewModel::removeLlmCredential,
@@ -115,6 +116,10 @@ fun PocketPilotApp(viewModel: PocketPilotViewModel) {
                 onRemoveGitCredential = viewModel::removeGitCredential,
                 onSaveRemoteServer = viewModel::saveRemoteServer,
                 onDeleteRemoteServer = viewModel::deleteRemoteServer,
+                onPreviewPluginBundle = viewModel::previewPluginBundle,
+                onInstallPluginBundle = viewModel::installPluginBundle,
+                onSetPluginEnabled = viewModel::setPluginEnabled,
+                onDeletePlugin = viewModel::deletePlugin,
                 onBack = { showSettings = false },
             )
         } else {

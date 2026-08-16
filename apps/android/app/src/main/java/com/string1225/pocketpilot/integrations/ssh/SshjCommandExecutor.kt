@@ -11,7 +11,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import net.schmizz.sshj.DefaultConfig
+import net.schmizz.sshj.DefaultSecurityProviderConfig
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.common.Factory
+import net.schmizz.sshj.common.SecurityUtils
+import net.schmizz.sshj.transport.kex.KeyExchange
 import net.schmizz.sshj.userauth.password.PasswordUtils
 
 /** Executes one non-interactive command using a fresh, strictly verified SSH connection. */
@@ -31,7 +36,7 @@ class SshjCommandExecutor(
     ): SshCommandResult {
         val started = System.nanoTime()
 
-        SSHClient().use { client ->
+        SSHClient(SshjClientConfigFactory.create()).use { client ->
             // The default client has no verifier. Exactly one strict policy is installed before connect.
             client.addHostKeyVerifier(StrictHostKeyVerifierFactory.create(server.hostKeyPolicy))
             client.connectTimeout = minOf(request.timeoutMillis, MAX_CONNECT_TIMEOUT_MILLIS).toInt()
@@ -159,6 +164,134 @@ class SshjCommandExecutor(
         const val OUTPUT_DRAIN_TIMEOUT_SECONDS = 5L
         const val UNKNOWN_EXIT_CODE = -1
     }
+}
+
+/**
+ * Builds an SSHJ configuration without changing Android's process-wide JCA providers.
+ *
+ * Android exposes an old platform provider named `BC`. SSHJ selects that provider for
+ * all JCA lookups, but some Android versions do not implement X25519 or EC in it.
+ * Advertising those algorithms makes negotiation choose a KEX that cannot start. Probe
+ * the same SSHJ lookup path and omit each unsupported family from this client instance.
+ */
+internal object SshjClientConfigFactory {
+    fun create(): DefaultConfig {
+        val config = newDefaultJcaConfig()
+        return configure(
+            config = config,
+            x25519Available = isX25519AvailableToSshj(),
+            ecdhAvailable = isEcdhAvailableToSshj(),
+        )
+    }
+
+    internal fun create(
+        x25519Available: Boolean,
+        ecdhAvailable: Boolean,
+    ): DefaultConfig = configure(
+        config = newDefaultJcaConfig(),
+        x25519Available = x25519Available,
+        ecdhAvailable = ecdhAvailable,
+    )
+
+    private fun configure(
+        config: DefaultConfig,
+        x25519Available: Boolean,
+        ecdhAvailable: Boolean,
+    ): DefaultConfig = config.also {
+        config.keyExchangeFactories = secureKeyExchangeFactories(
+            candidates = config.keyExchangeFactories,
+            x25519Available = x25519Available,
+            ecdhAvailable = ecdhAvailable,
+        )
+    }
+
+    fun isX25519AvailableToSshj(): Boolean {
+        useDefaultJcaProviders()
+        return runCatching {
+            // Curve25519DH needs all three primitives through SSHJ's selected provider.
+            SecurityUtils.getKeyAgreement(X25519_JCA_NAME)
+            SecurityUtils.getKeyFactory(X25519_JCA_NAME)
+            SecurityUtils.getKeyPairGenerator(X25519_JCA_NAME)
+        }.isSuccess
+    }
+
+    fun isEcdhAvailableToSshj(): Boolean {
+        useDefaultJcaProviders()
+        return runCatching {
+            // ECDH constructs keys with EC and performs agreement with ECDH.
+            SecurityUtils.getKeyPairGenerator(EC_JCA_NAME)
+            SecurityUtils.getKeyFactory(EC_JCA_NAME)
+            SecurityUtils.getKeyAgreement(ECDH_JCA_NAME)
+        }.isSuccess
+    }
+
+    private fun newDefaultJcaConfig(): DefaultConfig {
+        useDefaultJcaProviders()
+        return DefaultSecurityProviderConfig()
+    }
+
+    /**
+     * SSHJ normally registers/selects a provider named `BC`. Android already owns that
+     * name with a reduced legacy implementation, so forcing it breaks common primitives.
+     * This changes SSHJ's own lookup policy only; it never adds, removes, or reorders JCA
+     * providers. Default JCA lookup can then choose an implementation per algorithm.
+     */
+    private fun useDefaultJcaProviders() {
+        SecurityUtils.setSecurityProvider(null)
+        SecurityUtils.setRegisterBouncyCastle(false)
+    }
+
+    internal fun secureKeyExchangeFactories(
+        candidates: List<Factory.Named<KeyExchange>>,
+        x25519Available: Boolean,
+        ecdhAvailable: Boolean,
+    ): List<Factory.Named<KeyExchange>> {
+        val enabled = candidates.filter { factory ->
+            factory.name in SAFE_KEY_EXCHANGE_NAMES &&
+                (x25519Available || factory.name !in CURVE25519_KEY_EXCHANGE_NAMES) &&
+                (ecdhAvailable || factory.name !in ECDH_KEY_EXCHANGE_NAMES)
+        }
+        check(enabled.any { it.name != EXT_INFO_CLIENT }) {
+            "No supported secure SSH key exchange algorithm is available"
+        }
+        return enabled
+    }
+
+    private val CURVE25519_KEY_EXCHANGE_NAMES = setOf(
+        "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
+    )
+
+    private val ECDH_KEY_EXCHANGE_NAMES = setOf(
+        "ecdh-sha2-nistp521",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp256",
+    )
+
+    // SHA-2 KEX only. SHA-1 and the 1024-bit fixed group1 are not advertised.
+    private val SAFE_KEY_EXCHANGE_NAMES = CURVE25519_KEY_EXCHANGE_NAMES +
+        ECDH_KEY_EXCHANGE_NAMES + setOf(
+            "diffie-hellman-group-exchange-sha256",
+            "diffie-hellman-group14-sha256",
+            "diffie-hellman-group15-sha512",
+            "diffie-hellman-group16-sha512",
+            "diffie-hellman-group17-sha512",
+            "diffie-hellman-group18-sha512",
+            "diffie-hellman-group14-sha256@ssh.com",
+            "diffie-hellman-group15-sha256",
+            "diffie-hellman-group15-sha256@ssh.com",
+            "diffie-hellman-group15-sha384@ssh.com",
+            "diffie-hellman-group16-sha256",
+            "diffie-hellman-group16-sha384@ssh.com",
+            "diffie-hellman-group16-sha512@ssh.com",
+            "diffie-hellman-group18-sha512@ssh.com",
+            EXT_INFO_CLIENT,
+        )
+
+    private const val X25519_JCA_NAME = "X25519"
+    private const val EC_JCA_NAME = "EC"
+    private const val ECDH_JCA_NAME = "ECDH"
+    private const val EXT_INFO_CLIENT = "ext-info-c"
 }
 
 internal data class SshStreamSnapshot(

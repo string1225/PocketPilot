@@ -35,6 +35,9 @@ importers:
       '@pocketpilot/tool-runtime':
         specifier: workspace:*
         version: link:../tool-runtime
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
 
   packages/checkpoint:
     dependencies:

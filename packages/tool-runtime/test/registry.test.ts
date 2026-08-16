@@ -85,4 +85,23 @@ describe("ToolRegistry", () => {
       throwing.execute("test.echo", {}, context(controller.signal)),
     ).resolves.toMatchObject({ success: false, error: { code: "CANCELLED" } });
   });
+
+  it("does not start a tool cancelled while permission is being evaluated", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(async () => toolSuccess(null));
+    const registry = new ToolRegistry({
+      permissionPolicy: {
+        evaluate: async () => {
+          await Promise.resolve();
+          controller.abort();
+          return { outcome: "allow" } as const;
+        }
+      }
+    }).register({ ...tool(), execute });
+
+    await expect(
+      registry.execute("test.echo", {}, context(controller.signal)),
+    ).resolves.toMatchObject({ success: false, error: { code: "CANCELLED" } });
+    expect(execute).not.toHaveBeenCalled();
+  });
 });

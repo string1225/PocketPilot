@@ -12,6 +12,8 @@ import com.string1225.pocketpilot.model.Conversation
 import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.model.InstalledPlugin
+import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.Project
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.ThemePreference
@@ -68,6 +70,7 @@ data class PocketPilotUiState(
     val llmCredentialConfigured: Boolean = false,
     val gitCredentialConfigured: Boolean = false,
     val remoteServers: List<RemoteServerProfile> = emptyList(),
+    val plugins: List<InstalledPlugin> = emptyList(),
     val confirmDeepLinkDiscard: Boolean = false,
 ) {
     val selectedProject: Project?
@@ -139,6 +142,7 @@ class PocketPilotViewModel(
                     llmCredentialConfigured = service.hasLlmCredential(),
                     gitCredentialConfigured = service.hasGitCredential(),
                     remoteServers = service.listRemoteServers(),
+                    plugins = service.listPlugins(),
                 )
             }
             mutableState.update {
@@ -155,6 +159,7 @@ class PocketPilotViewModel(
                     llmCredentialConfigured = snapshot.llmCredentialConfigured,
                     gitCredentialConfigured = snapshot.gitCredentialConfigured,
                     remoteServers = snapshot.remoteServers,
+                    plugins = snapshot.plugins,
                     offlineDemo = service.isOfflineDemo,
                     runtimeAvailable = service.runtimeAvailable,
                 )
@@ -724,6 +729,51 @@ class PocketPilotViewModel(
         }
     }
 
+    fun previewPluginBundle(bundleJson: String): Result<PluginInstallPreview> =
+        runCatching { service.previewPluginBundle(bundleJson) }
+
+    fun installPluginBundle(bundleJson: String) {
+        if (!ensureNoActiveRunsForPluginChange()) return
+        viewModelScope.launch {
+            runOperation {
+                withContext(Dispatchers.IO) { service.installPluginBundle(bundleJson) }
+                val plugins = withContext(Dispatchers.IO) { service.listPlugins() }
+                mutableState.update { it.copy(plugins = plugins) }
+                postNotice(localized("插件已安装，默认保持停用", "Plugin installed and left disabled by default"))
+            }
+        }
+    }
+
+    fun setPluginEnabled(pluginId: String, enabled: Boolean) {
+        if (!ensureNoActiveRunsForPluginChange()) return
+        viewModelScope.launch {
+            runOperation {
+                withContext(Dispatchers.IO) { service.setPluginEnabled(pluginId, enabled) }
+                val plugins = withContext(Dispatchers.IO) { service.listPlugins() }
+                mutableState.update { current -> current.copy(plugins = plugins) }
+                postNotice(
+                    if (enabled) {
+                        localized("插件已启用", "Plugin enabled")
+                    } else {
+                        localized("插件已停用", "Plugin disabled")
+                    },
+                )
+            }
+        }
+    }
+
+    fun deletePlugin(pluginId: String) {
+        if (!ensureNoActiveRunsForPluginChange()) return
+        viewModelScope.launch {
+            runOperation {
+                withContext(Dispatchers.IO) { service.deletePlugin(pluginId) }
+                val plugins = withContext(Dispatchers.IO) { service.listPlugins() }
+                mutableState.update { it.copy(plugins = plugins) }
+                postNotice(localized("插件已卸载", "Plugin uninstalled"))
+            }
+        }
+    }
+
     fun consumeNotice(id: Long) {
         mutableState.update { current -> if (current.notice?.id == id) current.copy(notice = null) else current }
     }
@@ -898,6 +948,18 @@ class PocketPilotViewModel(
         return false
     }
 
+    private fun ensureNoActiveRunsForPluginChange(): Boolean {
+        if (coordinator.runs.value.values.none { !it.status.isTerminal }) return true
+        postNotice(
+            localized(
+                "请先停止所有 Agent Run，再修改全局插件状态",
+                "Stop all Agent runs before changing global plugin state",
+            ),
+            isError = true,
+        )
+        return false
+    }
+
     private fun canChangeContext(): Boolean {
         if (!mutableState.value.editorDirty) return true
         postNotice(
@@ -945,6 +1007,7 @@ private data class InitialSnapshot(
     val llmCredentialConfigured: Boolean,
     val gitCredentialConfigured: Boolean,
     val remoteServers: List<RemoteServerProfile>,
+    val plugins: List<InstalledPlugin>,
 )
 
 private data class ProjectSelection(

@@ -11,7 +11,9 @@ import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.IntegrationToolDispatcher
+import com.string1225.pocketpilot.data.HttpToolDispatcher
 import com.string1225.pocketpilot.data.ProjectRepository
+import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
@@ -20,8 +22,10 @@ import com.string1225.pocketpilot.runtime.PocketPilotRuntimeBridge
 import com.string1225.pocketpilot.runtime.ActiveRunRegistry
 import com.string1225.pocketpilot.runtime.RuntimeEventRouter
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
+import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
 import com.string1225.pocketpilot.llm.LlmToolRequestDispatcher
 import com.string1225.pocketpilot.llm.OpenAiCompatibleLlmClient
+import com.string1225.pocketpilot.integrations.http.OkHttpToolExecutor
 import com.string1225.pocketpilot.security.AndroidKeystoreCredentialStore
 import com.string1225.pocketpilot.security.SecureCredentialStore
 import com.string1225.pocketpilot.ui.PocketPilotService
@@ -64,6 +68,8 @@ class PocketPilotApplication : Application() {
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
         val sshServers = SshServerRepository(database, credentialStore)
+        val plugins = PluginRepository(database, File(filesDir, "plugins"))
+        val pluginRuns = PluginRunCoordinationGate()
 
         service = try {
             val eventRouter = RuntimeEventRouter()
@@ -78,10 +84,16 @@ class PocketPilotApplication : Application() {
                 approvals = approvals,
                 fallback = workspaceDispatcher,
             )
+            val httpDispatcher = HttpToolDispatcher(
+                executor = OkHttpToolExecutor(),
+                activeRuns = activeRuns,
+                approvals = approvals,
+                fallback = integrationDispatcher,
+            )
             val toolDispatcher = LlmToolRequestDispatcher(
                 client = OpenAiCompatibleLlmClient(credentialStore),
                 activeRuns = activeRuns,
-                fallback = integrationDispatcher,
+                fallback = httpDispatcher,
             )
             val bridge = PocketPilotRuntimeBridge(
                 webView = WebView(this),
@@ -102,6 +114,8 @@ class PocketPilotApplication : Application() {
                 settings = settings,
                 credentials = credentialStore,
                 sshServers = sshServers,
+                plugins = plugins,
+                pluginRuns = pluginRuns,
             )
         } catch (error: Throwable) {
             runtimeBridge?.close()
@@ -116,6 +130,8 @@ class PocketPilotApplication : Application() {
                 settings = settings,
                 credentials = credentialStore,
                 sshServers = sshServers,
+                plugins = plugins,
+                pluginRuns = pluginRuns,
             )
         }
         agentRunCoordinator = AgentRunCoordinator(

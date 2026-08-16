@@ -15,8 +15,8 @@ class CheckpointRepositoryBinaryTest {
     @Test
     fun binaryFileRoundTripsWithoutUtf8Conversion() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        context.deleteDatabase(DATABASE_NAME)
-        val database = PocketPilotDatabase(context)
+        val databaseName = "checkpoint-binary-${UUID.randomUUID()}.db"
+        val database = PocketPilotDatabase(context, databaseName)
         val projectsRoot = File(context.cacheDir, "checkpoint-binary-${System.nanoTime()}")
         val projectId = UUID.randomUUID().toString()
         val original = byteArrayOf(0, 1, 2, 0xff.toByte(), 0xfe.toByte(), 0x41)
@@ -43,13 +43,9 @@ class CheckpointRepositoryBinaryTest {
             assertArrayEquals(original, binary.readBytes())
         } finally {
             database.close()
-            context.deleteDatabase(DATABASE_NAME)
+            context.deleteDatabase(databaseName)
             projectsRoot.deleteRecursively()
             original.fill(0)
         }
-    }
-
-    private companion object {
-        const val DATABASE_NAME = "pocketpilot.db"
     }
 }

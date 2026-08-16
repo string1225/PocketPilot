@@ -162,7 +162,8 @@ internal class RuntimeAssetWebViewClient(
             put(
                 "Content-Security-Policy",
                 "default-src 'self'; connect-src 'none'; img-src 'self' data:; " +
-                    "style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; " +
+                    "style-src 'self' 'unsafe-inline'; script-src 'self'; " +
+                    "worker-src blob:; child-src blob:; object-src 'none'; " +
                     "frame-src 'none'; base-uri 'none'; form-action 'none'",
             )
         }

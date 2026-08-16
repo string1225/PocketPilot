@@ -42,7 +42,7 @@ pnpm install --frozen-lockfile
 pnpm check
 
 Push-Location apps\android
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+.\gradlew.bat :sshj-android:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 Pop-Location
 ```
 
@@ -78,6 +78,8 @@ Push-Location apps\android
 .\gradlew.bat connectedDebugAndroidTest
 Pop-Location
 ```
+
+`connectedDebugAndroidTest` 会由 Android Gradle Plugin 管理测试 APK 与目标 App 的安装/卸载，可能清除该安装下的 PocketPilot 数据。只在模拟器或可清空的专用测试机运行；不要在保存了真实项目和凭据的日常手机上运行。
 
 ## 4. 用 USB 连接手机
 
@@ -164,6 +166,14 @@ adb devices -l
 
 注意：智谱的 [Coding Plan 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)同时声明套餐权益仅限页面列出的受支持工具，PocketPilot 当前不在名单中。请先确认账号/套餐允许第三方客户端调用；否则改用你有权访问的 OpenAI-compatible Endpoint，不能仅凭 Base URL 可连接就推断套餐授权成立。
 
+### HTTP Tool Smoke Test
+
+1. 请求 Agent 使用 `http.request` GET `https://example.com/`，应无需审批并返回 `status=200`、`bodyEncoding=utf8` 和非空正文。
+2. 请求 POST 一个专用测试 Endpoint，审批框应显示 method、最终 host/port、请求体 UTF-8 字节数、timeout 和响应上限；拒绝后不应产生网络请求。
+3. `http://` 默认必须失败；只有显式 `allowInsecureHttp=true` 才进入审批，并显示 cleartext 警告。测试环境之外不建议允许。
+4. `https://127.0.0.1/`、私网/链路本地/metadata 域名及 Authorization/Cookie/Host 等模型提供的请求头应被拒绝；3xx 响应不能被自动跟随。
+5. 二进制或非法 UTF-8 响应应返回 `bodyEncoding=base64`；`truncated=true` 表示 Base64/文本仅代表捕获到的有界原始前缀。
+
 ## 8. Git 实接 Smoke Test
 
 使用专门的临时仓库：
@@ -216,4 +226,4 @@ adb shell dumpsys notification --noredact | Select-String PocketPilot
 2. `adb devices -l` 中目标状态为 `device`。
 3. 在当前任务告诉 Codex：“手机已连接，可以测试”；多设备时附目标 serial。
 
-随后 Codex 可以构建/覆盖安装 Debug APK、启动/停止 PocketPilot、运行 instrumentation tests、抓取应用进程日志和崩溃信息。清空 App 数据、卸载、重启手机或修改系统设置属于破坏性或扩范围操作，会先说明并征得确认。
+随后 Codex 可以构建/覆盖安装 Debug APK、启动/停止 PocketPilot、抓取应用进程日志和崩溃信息。Instrumentation tests 只会在模拟器、专用测试机，或你明确同意清空 PocketPilot 数据的设备上运行；清空 App 数据、卸载、重启手机或修改系统设置属于破坏性或扩范围操作，会先说明并征得确认。

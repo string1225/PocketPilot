@@ -3,7 +3,7 @@ import type {
   OpenAICompatibleConfig,
   OpenAICompatibleProtocol
 } from "@pocketpilot/providers";
-import type { ToolResult } from "@pocketpilot/tool-runtime";
+import type { JsonSchema, ToolResult } from "@pocketpilot/tool-runtime";
 
 export const ANDROID_BRIDGE_VERSION = 1 as const;
 
@@ -55,6 +55,24 @@ export interface RuntimeStartRequest {
   readonly systemPrompt?: string;
   readonly messages?: readonly AgentMessage[];
   readonly toolsEnabled?: boolean;
+  readonly plugins?: readonly RuntimePluginPackage[];
+}
+
+export interface RuntimePluginTool {
+  readonly name: string;
+  readonly description: string;
+  readonly risk: "read";
+  readonly inputSchema: JsonSchema;
+}
+
+export interface RuntimePluginPackage {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly description: string;
+  readonly sourceSha256: string;
+  readonly source: string;
+  readonly tools: readonly RuntimePluginTool[];
 }
 
 export type RuntimeProviderConfig =
@@ -154,6 +172,245 @@ const parseHistory = (value: unknown): readonly AgentMessage[] | undefined => {
   });
 };
 
+const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
+const pluginIdPattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/u;
+const pluginToolPattern = /^[a-z][a-z0-9_]{0,63}$/u;
+const pluginVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const pluginHashPattern = /^[0-9a-f]{64}$/u;
+const pluginSchemaKeys = new Set([
+  "type", "title", "description", "properties", "required", "items", "enum",
+  "additionalProperties", "minLength", "maxLength", "minimum", "maximum", "default"
+]);
+const pluginSchemaTypes = new Set([
+  "object", "array", "string", "number", "integer", "boolean", "null"
+]);
+const owns = (value: object, key: PropertyKey): boolean =>
+  Object.prototype.hasOwnProperty.call(value, key);
+const isValidPluginVersion = (value: string): boolean => {
+  if (!pluginVersionPattern.test(value)) return false;
+  const withoutBuild = value.split("+", 1)[0] ?? value;
+  const separator = withoutBuild.indexOf("-");
+  if (separator < 0) return true;
+  return withoutBuild.slice(separator + 1).split(".").every((part) =>
+    !(/^\d+$/u.test(part) && part.length > 1 && part.startsWith("0"))
+  );
+};
+
+const optionalBoundedString = (
+  value: unknown,
+  path: string,
+  maximum: number,
+): void => {
+  if (value !== undefined && (typeof value !== "string" || value.length > maximum)) {
+    throw new Error(`${path} must be a string with at most ${maximum} characters.`);
+  }
+};
+
+const optionalNonNegativeInteger = (value: unknown, path: string): number | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${path} must be a non-negative integer.`);
+  }
+  return value;
+};
+
+const optionalFiniteNumber = (value: unknown, path: string): number | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${path} must be a finite number.`);
+  }
+  return value;
+};
+
+const validateRuntimePluginSchema = (
+  schema: Record<string, unknown>,
+  path: string,
+  depth: number,
+  root: boolean,
+): void => {
+  if (depth > 8) throw new Error(`${path} exceeds the maximum schema depth.`);
+  const unsupported = Object.keys(schema).find((key) => !pluginSchemaKeys.has(key));
+  if (unsupported !== undefined) throw new Error(`${path} contains unsupported field: ${unsupported}`);
+  const type = schema.type;
+  if (typeof type !== "string" || !pluginSchemaTypes.has(type)) {
+    throw new Error(`${path}.type is unsupported.`);
+  }
+  if (root && type !== "object") throw new Error(`${path}.type must be object.`);
+  optionalBoundedString(schema.title, `${path}.title`, 200);
+  optionalBoundedString(schema.description, `${path}.description`, 500);
+  const minLength = optionalNonNegativeInteger(schema.minLength, `${path}.minLength`);
+  const maxLength = optionalNonNegativeInteger(schema.maxLength, `${path}.maxLength`);
+  if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) {
+    throw new Error(`${path}.minLength exceeds maxLength.`);
+  }
+  if ((minLength ?? 0) > 1_048_576 || (maxLength ?? 0) > 1_048_576) {
+    throw new Error(`${path} string length limit is too large.`);
+  }
+  const minimum = optionalFiniteNumber(schema.minimum, `${path}.minimum`);
+  const maximum = optionalFiniteNumber(schema.maximum, `${path}.maximum`);
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    throw new Error(`${path}.minimum exceeds maximum.`);
+  }
+  if (schema.enum !== undefined && (!Array.isArray(schema.enum) || schema.enum.length < 1 || schema.enum.length > 100)) {
+    throw new Error(`${path}.enum must contain 1 to 100 JSON values.`);
+  }
+  if (type !== "string" && (schema.minLength !== undefined || schema.maxLength !== undefined)) {
+    throw new Error(`${path} uses string-only schema keywords.`);
+  }
+  if (type !== "number" && type !== "integer" && (schema.minimum !== undefined || schema.maximum !== undefined)) {
+    throw new Error(`${path} uses numeric-only schema keywords.`);
+  }
+  if (type === "object") {
+    if (schema.additionalProperties !== false) {
+      throw new Error(`${path} must set additionalProperties to false.`);
+    }
+    const properties = schema.properties === undefined ? {} : asRecord(schema.properties);
+    if (properties === undefined || Object.keys(properties).length > 64) {
+      throw new Error(`${path}.properties must be an object with at most 64 fields.`);
+    }
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      if (propertyName.length < 1 || propertyName.length > 80) {
+        throw new Error(`${path} has an invalid property name.`);
+      }
+      const child = asRecord(propertySchema);
+      if (child === undefined) throw new Error(`${path}.properties.${propertyName} must be an object.`);
+      validateRuntimePluginSchema(child, `${path}.properties.${propertyName}`, depth + 1, false);
+    }
+    if (schema.required !== undefined) {
+      if (!Array.isArray(schema.required)) throw new Error(`${path}.required must be an array.`);
+      const seen = new Set<string>();
+      for (const field of schema.required) {
+        if (typeof field !== "string" || !owns(properties, field) || !seen.add(field)) {
+          throw new Error(`${path}.required must contain unique declared property names.`);
+        }
+      }
+    }
+  } else if (
+    schema.properties !== undefined ||
+    schema.required !== undefined ||
+    schema.additionalProperties !== undefined
+  ) {
+    throw new Error(`${path} uses object-only schema keywords.`);
+  }
+  if (type === "array") {
+    const items = asRecord(schema.items);
+    if (items === undefined) throw new Error(`${path}.items must be an object.`);
+    validateRuntimePluginSchema(items, `${path}.items`, depth + 1, false);
+  } else if (schema.items !== undefined) {
+    throw new Error(`${path}.items is only valid for arrays.`);
+  }
+};
+
+const parsePlugins = (value: unknown): readonly RuntimePluginPackage[] | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new Error("plugins must be an array with at most 32 items.");
+  }
+  const seenPluginIds = new Set<string>();
+  const seenToolNames = new Set<string>();
+  let totalSourceBytes = 0;
+  let totalToolCount = 0;
+  return value.map((item, pluginIndex) => {
+    const plugin = asRecord(item);
+    const path = `plugins[${pluginIndex}]`;
+    if (plugin === undefined) throw new Error(`${path} must be an object.`);
+    const allowedPluginKeys = new Set([
+      "id", "name", "version", "description", "sourceSha256", "source", "tools"
+    ]);
+    const unsupportedPluginKey = Object.keys(plugin).find((key) => !allowedPluginKeys.has(key));
+    if (unsupportedPluginKey !== undefined) {
+      throw new Error(`${path} contains an unsupported field: ${unsupportedPluginKey}`);
+    }
+    const { id, name, version, description, sourceSha256, source, tools } = plugin;
+    if (typeof id !== "string" || id.length > 80 || !pluginIdPattern.test(id)) {
+      throw new Error(`${path}.id is not a valid plugin identifier.`);
+    }
+    if (!seenPluginIds.add(id)) throw new Error(`Duplicate plugin id: ${id}`);
+    if (typeof name !== "string" || name.length < 1 || name.length > 80 || name !== name.trim()) {
+      throw new Error(`${path}.name is invalid.`);
+    }
+    if (typeof version !== "string" || !isValidPluginVersion(version)) {
+      throw new Error(`${path}.version must be valid SemVer.`);
+    }
+    if (
+      typeof description !== "string" ||
+      description.length > 500 ||
+      description !== description.trim()
+    ) {
+      throw new Error(`${path}.description is invalid.`);
+    }
+    if (typeof sourceSha256 !== "string" || !pluginHashPattern.test(sourceSha256)) {
+      throw new Error(`${path}.sourceSha256 must be a lowercase SHA-256 digest.`);
+    }
+    if (
+      typeof source !== "string" ||
+      source.length === 0 ||
+      source.includes("\u0000") ||
+      utf8Bytes(source) > 120 * 1_024
+    ) {
+      throw new Error(`${path}.source must contain at most 122880 UTF-8 bytes.`);
+    }
+    totalSourceBytes += utf8Bytes(source);
+    if (totalSourceBytes > 512 * 1_024) {
+      throw new Error("Enabled plugin source exceeds the 524288-byte run limit.");
+    }
+    if (!Array.isArray(tools) || tools.length < 1 || tools.length > 16) {
+      throw new Error(`${path}.tools must contain 1 to 16 tools.`);
+    }
+    totalToolCount += tools.length;
+    if (totalToolCount > 64) throw new Error("Enabled plugins can expose at most 64 tools.");
+    const parsedTools = tools.map((toolValue, toolIndex): RuntimePluginTool => {
+      const tool = asRecord(toolValue);
+      const toolPath = `${path}.tools[${toolIndex}]`;
+      if (tool === undefined) throw new Error(`${toolPath} must be an object.`);
+      const allowedToolKeys = new Set(["name", "description", "risk", "inputSchema"]);
+      const unsupportedToolKey = Object.keys(tool).find((key) => !allowedToolKeys.has(key));
+      if (unsupportedToolKey !== undefined) {
+        throw new Error(`${toolPath} contains an unsupported field: ${unsupportedToolKey}`);
+      }
+      if (typeof tool.name !== "string" || !pluginToolPattern.test(tool.name)) {
+        throw new Error(`${toolPath}.name is invalid.`);
+      }
+      const qualifiedName = `plugin.${id}.${tool.name}`;
+      if (!seenToolNames.add(qualifiedName)) throw new Error(`Duplicate plugin tool: ${qualifiedName}`);
+      if (
+        typeof tool.description !== "string" ||
+        tool.description.length < 1 ||
+        tool.description.length > 500 ||
+        tool.description !== tool.description.trim()
+      ) {
+        throw new Error(`${toolPath}.description is invalid.`);
+      }
+      if (tool.risk !== "read") {
+        throw new Error(`${toolPath}.risk must be read; MVP plugins are pure computation only.`);
+      }
+      const inputSchema = asRecord(tool.inputSchema);
+      if (
+        inputSchema === undefined ||
+        utf8Bytes(JSON.stringify(inputSchema)) > 32 * 1_024
+      ) {
+        throw new Error(`${toolPath}.inputSchema must be a bounded strict object schema.`);
+      }
+      validateRuntimePluginSchema(inputSchema, `${toolPath}.inputSchema`, 0, true);
+      return {
+        name: tool.name,
+        description: tool.description,
+        risk: "read",
+        inputSchema: inputSchema as JsonSchema
+      };
+    });
+    return {
+      id,
+      name,
+      version,
+      description,
+      sourceSha256,
+      source,
+      tools: parsedTools
+    };
+  });
+};
+
 export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
   let parsed: unknown;
   try {
@@ -173,7 +430,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     provider,
     systemPrompt,
     messages,
-    toolsEnabled
+    toolsEnabled,
+    plugins
   } = record;
   if (
     typeof runId !== "string" ||
@@ -205,6 +463,7 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     throw new Error("toolsEnabled must be a boolean.");
   }
   const parsedMessages = parseHistory(messages);
+  const parsedPlugins = parsePlugins(plugins);
   return {
     runId,
     projectId,
@@ -213,7 +472,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     ...(parsedProvider === undefined ? {} : { provider: parsedProvider }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     ...(parsedMessages === undefined ? {} : { messages: parsedMessages }),
-    ...(toolsEnabled === undefined ? {} : { toolsEnabled })
+    ...(toolsEnabled === undefined ? {} : { toolsEnabled }),
+    ...(parsedPlugins === undefined ? {} : { plugins: parsedPlugins })
   };
 };
 
