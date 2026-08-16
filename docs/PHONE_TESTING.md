@@ -155,11 +155,11 @@ adb devices -l
 ## 7. 真实 LLM 测试
 
 1. 左上角设置 > 模型。
-2. 模型协议默认应选中“OpenAI Chat API”；Endpoint、文本模型、图片模型和 API Key（AK）输入框均显示且为空时不能保存。填写专用测试连接后点击“保存并测试”，文本和 1x1 测试图片都成功才可保存。
+2. 模型协议默认应选中“OpenAI Chat API”；Endpoint、文本模型、图片模型和 API Key（AK）输入框均显示且为空时不能保存。填写专用测试连接后点击“保存”，确认弹窗保持打开并显示“测试中…”转圈，且文本和 1x1 测试图片都成功后才关闭并保存。
 3. 发送“列出当前项目文件”；确认只显示用户与 Assistant 消息，不显示 `run.started`、`run.completed` 或 Tool/Status 卡片。在同一会话继续追问，验证多轮历史。
 4. 返回设置，把模型协议切换为“GLM”；Endpoint 输入框应隐藏，实际请求固定使用：
    `https://open.bigmodel.cn/api/coding/paas/v4`
-5. GLM 文本模型应默认为 `glm-5.3`、图片模型固定为 `glm-5v-turbo`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 执行“保存并测试”，再验证 SSE 打字机效果、图片识别、Tool calling 与多轮历史。
+5. GLM 文本模型应默认为 `glm-5.3`、图片模型固定为 `glm-5v-turbo`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 点击“保存”，等待连接测试完成，再验证 SSE 打字机效果、图片识别、Tool calling 与多轮历史。
 6. 切回 OpenAI Chat API，确认 Endpoint 输入框重新显示且必填。设置 UI 不应再显示 Responses 协议选项；Responses 仅保留为后端兼容能力。
 7. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
 

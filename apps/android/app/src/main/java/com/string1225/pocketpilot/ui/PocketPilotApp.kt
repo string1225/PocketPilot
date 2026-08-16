@@ -115,12 +115,17 @@ fun PocketPilotApp(
             BackHandler { showSettings = false }
             SettingsScreen(
                 settings = state.settings,
+                snackbarHostState = snackbarHostState,
                 llmCredentialConfigured = state.llmCredentialConfigured,
+                llmConnectionTestInProgress = state.llmConnectionTestInProgress,
+                llmConnectionTestSucceeded = state.llmConnectionTestSucceeded,
+                llmConnectionTestError = state.llmConnectionTestError,
                 gitCredentialConfigured = state.gitCredentialConfigured,
                 remoteServers = state.remoteServers,
                 plugins = state.plugins,
                 onSettingsChange = viewModel::updateSettings,
                 onSaveLlmConnection = viewModel::saveLlmConnection,
+                onClearLlmConnectionTestResult = viewModel::clearLlmConnectionTestResult,
                 onRemoveLlmCredential = viewModel::removeLlmCredential,
                 onSaveGitCredential = viewModel::saveGitCredential,
                 onRemoveGitCredential = viewModel::removeGitCredential,

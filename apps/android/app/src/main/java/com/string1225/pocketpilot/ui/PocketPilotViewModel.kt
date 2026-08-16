@@ -74,6 +74,9 @@ data class PocketPilotUiState(
     val runtimeAvailable: Boolean = true,
     val settings: PocketPilotSettings = PocketPilotSettings(),
     val llmCredentialConfigured: Boolean = false,
+    val llmConnectionTestInProgress: Boolean = false,
+    val llmConnectionTestSucceeded: Boolean? = null,
+    val llmConnectionTestError: String? = null,
     val gitCredentialConfigured: Boolean = false,
     val remoteServers: List<RemoteServerProfile> = emptyList(),
     val plugins: List<InstalledPlugin> = emptyList(),
@@ -114,6 +117,7 @@ class PocketPilotViewModel(
     private val observedTerminalRunIds = mutableSetOf<String>()
     private val settingsMutex = Mutex()
     private var draftGeneration = 0L
+    private var llmConnectionTestJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -790,8 +794,16 @@ class PocketPilotViewModel(
         updateSettings(mutableState.value.settings.copy(language = language))
 
     fun saveLlmConnection(updatedSettings: PocketPilotSettings, rawSecret: String?) {
-        viewModelScope.launch {
-            runOperation {
+        if (llmConnectionTestJob?.isActive == true) return
+        mutableState.update {
+            it.copy(
+                llmConnectionTestInProgress = true,
+                llmConnectionTestSucceeded = null,
+                llmConnectionTestError = null,
+            )
+        }
+        llmConnectionTestJob = viewModelScope.launch {
+            try {
                 val secret = rawSecret?.takeIf(String::isNotBlank)?.toCharArray()
                 try {
                     withContext(Dispatchers.IO) {
@@ -807,6 +819,9 @@ class PocketPilotViewModel(
                                     settings = it.settings.copyLlmConnectionFrom(persistedSettings),
                                     llmCredentialConfigured = service.hasLlmCredential(),
                                     offlineDemo = service.isOfflineDemo,
+                                    llmConnectionTestInProgress = false,
+                                    llmConnectionTestSucceeded = true,
+                                    llmConnectionTestError = null,
                                 )
                             }
                         }
@@ -819,6 +834,37 @@ class PocketPilotViewModel(
                         "文本与图片模型连接测试通过，配置已安全保存",
                         "Text and image model tests passed; the connection was saved securely",
                     ),
+                )
+            } catch (cancelled: CancellationException) {
+                mutableState.update {
+                    it.copy(
+                        llmConnectionTestInProgress = false,
+                        llmConnectionTestSucceeded = false,
+                        llmConnectionTestError = null,
+                    )
+                }
+                throw cancelled
+            } catch (error: Throwable) {
+                val message = error.displayMessage()
+                mutableState.update {
+                    it.copy(
+                        llmConnectionTestInProgress = false,
+                        llmConnectionTestSucceeded = false,
+                        llmConnectionTestError = message,
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearLlmConnectionTestResult() {
+        mutableState.update {
+            if (it.llmConnectionTestInProgress) {
+                it
+            } else {
+                it.copy(
+                    llmConnectionTestSucceeded = null,
+                    llmConnectionTestError = null,
                 )
             }
         }

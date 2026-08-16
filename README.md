@@ -77,7 +77,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 ## 首次运行
 
 1. 打开左上角设置。
-2. 在“模型”中使用默认的 OpenAI Chat API，并填写 HTTPS Endpoint、文本模型、图片模型和 API Key；或选择 GLM，确认文本模型（默认 `glm-5.3`）并录入 API Key，图片识别固定使用 `glm-5v-turbo`。点击“保存并测试”后，App 会先验证两种模型再启用连接。
+2. 在“模型”中使用默认的 OpenAI Chat API，并填写 HTTPS Endpoint、文本模型、图片模型和 API Key；或选择 GLM，确认文本模型（默认 `glm-5.3`）并录入 API Key，图片识别固定使用 `glm-5v-turbo`。点击“保存”后，App 会显示测试进度，先验证两种模型再启用连接。
 3. 如需私有 HTTPS Git，在“Git HTTPS 凭据”录入低权限 Token。
 4. 如需 SSH，添加服务器，填写服务器公钥的 `SHA256:` 指纹，并录入密码或通过系统文件选择器导入 OpenSSH/PEM 私钥。
 5. 返回聊天输入任务；需要远端副作用时，在审批框核对完整目标和操作。

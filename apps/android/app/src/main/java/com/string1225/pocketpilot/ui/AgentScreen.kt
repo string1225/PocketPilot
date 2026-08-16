@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -42,12 +45,12 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedIconButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -189,30 +193,18 @@ fun AgentScreen(
             )
         }
 
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            OutlinedIconButton(
-                onClick = { imagePicker.launch(arrayOf("image/*")) },
-                enabled = attachments.size < MAX_CHAT_IMAGES,
-            ) {
-                Icon(
-                    Icons.Rounded.AddPhotoAlternate,
-                    contentDescription = ppText(language, "添加图片", "Add images"),
-                )
-            }
-            OutlinedTextField(
+            CompactComposerField(
                 value = input,
                 onValueChange = onInputChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused && speechState.isActive) speechInputController.stop()
-                    },
+                modifier = Modifier.fillMaxWidth(),
+                onFocusChange = { isFocused ->
+                    if (isFocused && speechState.isActive) speechInputController.stop()
+                },
                 placeholder = {
                     Text(
                         if (offlineDemo) {
@@ -224,63 +216,157 @@ fun AgentScreen(
                 },
                 maxLines = 5,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (hasDraft) onSend() }),
-            )
-            OutlinedIconButton(
-                onClick = {
-                    if (speechState.isActive) {
-                        speechInputController.stop()
-                    } else if (
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                        PackageManager.PERMISSION_GRANTED
-                    ) {
-                        startSpeechInput()
-                    } else {
-                        recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                keyboardActions = KeyboardActions(onSend = {
+                    if (hasDraft) {
+                        if (speechState.isActive) speechInputController.stop()
+                        onSend()
                     }
-                },
-                colors = if (speechState.isActive) {
-                    IconButtonDefaults.outlinedIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                } else {
-                    IconButtonDefaults.outlinedIconButtonColors()
-                },
+                }),
+            )
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 7.dp, bottom = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                Icon(
-                    if (speechState.isActive) Icons.Rounded.GraphicEq else Icons.Rounded.KeyboardVoice,
-                    contentDescription = if (speechState.isActive) {
-                        ppText(language, "停止语音输入", "Stop voice input")
-                    } else {
-                        ppText(language, "语音输入", "Voice input")
+                IconButton(
+                    onClick = {
+                        if (speechState.isActive) speechInputController.stop()
+                        imagePicker.launch(arrayOf("image/*"))
                     },
-                )
-            }
-            FilledIconButton(
-                onClick = if (primaryActionStops) onCancel else onSend,
-                enabled = primaryActionStops || hasDraft,
-                colors = if (primaryActionStops) {
-                    IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
+                    enabled = attachments.size < MAX_CHAT_IMAGES,
+                    modifier = Modifier.size(COMPOSER_BUTTON_SIZE),
+                ) {
+                    Icon(
+                        Icons.Rounded.AddPhotoAlternate,
+                        contentDescription = ppText(language, "添加图片", "Add images"),
+                        modifier = Modifier.size(COMPOSER_ICON_SIZE),
                     )
-                } else {
-                    IconButtonDefaults.filledIconButtonColors()
-                },
-            ) {
-                Icon(
-                    if (primaryActionStops) Icons.Rounded.StopCircle else Icons.AutoMirrored.Rounded.Send,
-                    contentDescription = if (primaryActionStops) {
-                        ppText(language, "终止", "Stop")
-                    } else if (active) {
-                        ppText(language, "加入队列", "Queue message")
-                    } else {
-                        ppText(language, "发送", "Send")
+                }
+                IconButton(
+                    onClick = {
+                        if (speechState.isActive) {
+                            speechInputController.stop()
+                        } else if (
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                            PackageManager.PERMISSION_GRANTED
+                        ) {
+                            startSpeechInput()
+                        } else {
+                            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     },
-                )
+                    modifier = Modifier.size(COMPOSER_BUTTON_SIZE),
+                    colors = if (speechState.isActive) {
+                        IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    } else {
+                        IconButtonDefaults.iconButtonColors()
+                    },
+                ) {
+                    Icon(
+                        if (speechState.isActive) Icons.Rounded.GraphicEq else Icons.Rounded.KeyboardVoice,
+                        contentDescription = if (speechState.isActive) {
+                            ppText(language, "停止语音输入", "Stop voice input")
+                        } else {
+                            ppText(language, "语音输入", "Voice input")
+                        },
+                        modifier = Modifier.size(COMPOSER_ICON_SIZE),
+                    )
+                }
+                FilledIconButton(
+                    onClick = {
+                        if (speechState.isActive) speechInputController.stop()
+                        if (primaryActionStops) onCancel() else onSend()
+                    },
+                    enabled = primaryActionStops || hasDraft,
+                    modifier = Modifier.size(COMPOSER_BUTTON_SIZE),
+                    colors = if (primaryActionStops) {
+                        IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        IconButtonDefaults.filledIconButtonColors()
+                    },
+                ) {
+                    Icon(
+                        if (primaryActionStops) Icons.Rounded.StopCircle else Icons.AutoMirrored.Rounded.Send,
+                        contentDescription = if (primaryActionStops) {
+                            ppText(language, "终止", "Stop")
+                        } else if (active) {
+                            ppText(language, "加入队列", "Queue message")
+                        } else {
+                            ppText(language, "发送", "Send")
+                        },
+                        modifier = Modifier.size(COMPOSER_ICON_SIZE),
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun CompactComposerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+    placeholder: @Composable () -> Unit,
+    maxLines: Int,
+    keyboardOptions: KeyboardOptions,
+    keyboardActions: KeyboardActions,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = if (focused) 2.dp else 1.dp,
+            color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        ),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = COMPOSER_MIN_HEIGHT)
+                .onFocusChanged { focusState ->
+                    focused = focusState.isFocused
+                    onFocusChange(focusState.isFocused)
+                }
+                .padding(
+                    start = 16.dp,
+                    top = 16.dp,
+                    end = COMPOSER_ACTIONS_WIDTH,
+                    bottom = 16.dp,
+                ),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            maxLines = maxLines,
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
+            decorationBox = { innerTextField ->
+                Box {
+                    if (value.isEmpty()) {
+                        CompositionLocalProvider(
+                            LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant,
+                        ) {
+                            Box(contentAlignment = Alignment.CenterStart) { placeholder() }
+                        }
+                    }
+                    innerTextField()
+                }
+            },
+        )
     }
 }
 
@@ -570,3 +656,7 @@ private fun decodeAttachmentThumbnail(context: Context, uri: Uri): ImageBitmap? 
 
 private const val MAX_CHAT_IMAGES = 6
 private const val THUMBNAIL_SIZE_PX = 384
+private val COMPOSER_ACTIONS_WIDTH = 130.dp
+private val COMPOSER_BUTTON_SIZE = 40.dp
+private val COMPOSER_ICON_SIZE = 18.dp
+private val COMPOSER_MIN_HEIGHT = 58.dp

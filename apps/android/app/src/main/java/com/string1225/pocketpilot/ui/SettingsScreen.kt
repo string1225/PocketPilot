@@ -1,12 +1,15 @@
 package com.string1225.pocketpilot.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -32,17 +35,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -69,12 +77,17 @@ private enum class EditableSetting {
 @Composable
 fun SettingsScreen(
     settings: PocketPilotSettings,
+    snackbarHostState: SnackbarHostState,
     llmCredentialConfigured: Boolean,
+    llmConnectionTestInProgress: Boolean,
+    llmConnectionTestSucceeded: Boolean?,
+    llmConnectionTestError: String?,
     gitCredentialConfigured: Boolean,
     remoteServers: List<RemoteServerProfile>,
     plugins: List<InstalledPlugin>,
     onSettingsChange: (PocketPilotSettings) -> Unit,
     onSaveLlmConnection: (PocketPilotSettings, String?) -> Unit,
+    onClearLlmConnectionTestResult: () -> Unit,
     onRemoveLlmCredential: () -> Unit,
     onSaveGitCredential: (String) -> Unit,
     onRemoveGitCredential: () -> Unit,
@@ -97,6 +110,7 @@ fun SettingsScreen(
     var showPlugins by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(ppText(language, "设置", "Settings")) },
@@ -129,7 +143,10 @@ fun SettingsScreen(
                         "${settings.llmProvider.label()} · " +
                         if (llmCredentialConfigured) ppText(language, "已配置密钥", "Key configured")
                         else ppText(language, "未配置密钥", "No key"),
-                    onClick = { showModelSettings = true },
+                    onClick = {
+                        onClearLlmConnectionTestResult()
+                        showModelSettings = true
+                    },
                 )
             }
             item {
@@ -264,13 +281,19 @@ fun SettingsScreen(
         ModelSettingsDialog(
             settings = settings,
             credentialConfigured = llmCredentialConfigured,
-            onDismiss = { showModelSettings = false },
-            onSave = { updated, secret ->
+            testInProgress = llmConnectionTestInProgress,
+            testSucceeded = llmConnectionTestSucceeded,
+            testError = llmConnectionTestError,
+            onDismiss = {
                 showModelSettings = false
+                onClearLlmConnectionTestResult()
+            },
+            onSave = { updated, secret ->
                 onSaveLlmConnection(updated, secret?.takeIf { it.isNotBlank() })
             },
             onRemoveCredential = {
                 showModelSettings = false
+                onClearLlmConnectionTestResult()
                 onRemoveLlmCredential()
             },
         )
@@ -485,6 +508,9 @@ private fun <T> ChoiceDialog(
 private fun ModelSettingsDialog(
     settings: PocketPilotSettings,
     credentialConfigured: Boolean,
+    testInProgress: Boolean,
+    testSucceeded: Boolean?,
+    testError: String?,
     onDismiss: () -> Unit,
     onSave: (PocketPilotSettings, String?) -> Unit,
     onRemoveCredential: () -> Unit,
@@ -527,6 +553,8 @@ private fun ModelSettingsDialog(
     // Never persist credentials through SavedState/Bundle. This state exists
     // only while the dialog is composed and is cleared before every exit.
     var secret by remember { mutableStateOf("") }
+    var submittedTestAttempt by rememberSaveable { mutableStateOf(testInProgress) }
+    var testErrorDismissedByEdit by remember { mutableStateOf(false) }
     val model = when (provider) {
         LlmProviderPreference.OPENAI_CHAT -> openAiModel
         LlmProviderPreference.GLM -> glmModel
@@ -541,6 +569,7 @@ private fun ModelSettingsDialog(
     )
     val selectProvider: (LlmProviderPreference) -> Unit = { choice ->
         if (provider != choice) {
+            testErrorDismissedByEdit = true
             provider = choice
             // A credential is scoped to its provider and endpoint. Clearing the draft
             // prevents accidentally submitting a key typed for the previous host.
@@ -551,19 +580,42 @@ private fun ModelSettingsDialog(
         secret = ""
         onDismiss()
     }
+    LaunchedEffect(testInProgress, testSucceeded) {
+        if (testInProgress) {
+            submittedTestAttempt = true
+        } else if (submittedTestAttempt && testSucceeded == true) {
+            clearAndDismiss()
+        }
+    }
+    LaunchedEffect(testError) {
+        testErrorDismissedByEdit = false
+    }
     AlertDialog(
-        onDismissRequest = clearAndDismiss,
+        onDismissRequest = {
+            if (!testInProgress) clearAndDismiss()
+        },
         title = { Text(ppText(language, "模型连接", "Model connection")) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (!testInProgress && !testErrorDismissedByEdit && !testError.isNullOrBlank()) {
+                    Text(
+                        text = testError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Text(ppText(language, "模型服务", "Model provider"), style = MaterialTheme.typography.labelLarge)
                 LlmProviderPreference.entries.forEach { choice ->
                     ListItem(
-                        modifier = Modifier.clickable { selectProvider(choice) },
+                        modifier = Modifier.clickable(enabled = !testInProgress) { selectProvider(choice) },
                         headlineContent = { Text(choice.label()) },
                         leadingContent = {
                             RadioButton(
                                 selected = provider == choice,
+                                enabled = !testInProgress,
                                 onClick = { selectProvider(choice) },
                             )
                         },
@@ -573,11 +625,13 @@ private fun ModelSettingsDialog(
                     OutlinedTextField(
                         value = openAiBaseUrl,
                         onValueChange = {
+                            testErrorDismissedByEdit = true
                             openAiBaseUrl = it.take(2_048)
                             secret = ""
                         },
                         label = { Text(ppText(language, "兼容 API Endpoint", "Compatible API endpoint")) },
                         singleLine = true,
+                        enabled = !testInProgress,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
@@ -593,6 +647,7 @@ private fun ModelSettingsDialog(
                 OutlinedTextField(
                     value = model,
                     onValueChange = { value ->
+                        testErrorDismissedByEdit = true
                         when (provider) {
                             LlmProviderPreference.OPENAI_CHAT -> openAiModel = value.take(128)
                             LlmProviderPreference.GLM -> glmModel = value.take(128)
@@ -600,12 +655,16 @@ private fun ModelSettingsDialog(
                     },
                     label = { Text(ppText(language, "默认文本模型", "Default text model")) },
                     singleLine = true,
+                    enabled = !testInProgress,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (provider == LlmProviderPreference.OPENAI_CHAT) {
                     OutlinedTextField(
                         value = openAiImageModel,
-                        onValueChange = { openAiImageModel = it.take(128) },
+                        onValueChange = {
+                            testErrorDismissedByEdit = true
+                            openAiImageModel = it.take(128)
+                        },
                         label = { Text(ppText(language, "图片模型", "Image model")) },
                         supportingText = {
                             Text(
@@ -617,6 +676,7 @@ private fun ModelSettingsDialog(
                             )
                         },
                         singleLine = true,
+                        enabled = !testInProgress,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
@@ -631,7 +691,10 @@ private fun ModelSettingsDialog(
                 }
                 OutlinedTextField(
                     value = secret,
-                    onValueChange = { secret = it.take(16_384) },
+                    onValueChange = {
+                        testErrorDismissedByEdit = true
+                        secret = it.take(16_384)
+                    },
                     label = {
                         Text(
                             if (credentialConfigured && !requiresNewCredential) {
@@ -643,6 +706,7 @@ private fun ModelSettingsDialog(
                     },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
+                    enabled = !testInProgress,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (requiresNewCredential && credentialConfigured) {
@@ -668,14 +732,16 @@ private fun ModelSettingsDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = model.isNotBlank() &&
+                enabled = !testInProgress &&
+                    model.isNotBlank() &&
                     (provider == LlmProviderPreference.GLM || openAiImageModel.isNotBlank()) &&
                     (provider == LlmProviderPreference.GLM ||
                         LlmSettingsPolicy.isValidOpenAiBaseUrl(resolvedBaseUrl)) &&
                     (!requiresNewCredential || secret.isNotBlank()),
                 onClick = {
                     val submittedSecret = secret.takeIf { it.isNotBlank() }
-                    secret = ""
+                    submittedTestAttempt = true
+                    testErrorDismissedByEdit = false
                     onSave(
                         settings.copy(
                             modelName = model.trim(),
@@ -694,19 +760,40 @@ private fun ModelSettingsDialog(
                         submittedSecret,
                     )
                 },
-            ) { Text(ppText(language, "保存并测试", "Save & test")) }
+            ) {
+                if (testInProgress) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(ppText(language, "测试中…", "Testing…"))
+                    }
+                } else {
+                    Text(ppText(language, "保存", "Save"))
+                }
+            }
         },
         dismissButton = {
             Row {
                 if (credentialConfigured) {
-                    TextButton(onClick = {
-                        secret = ""
-                        onRemoveCredential()
-                    }) {
+                    TextButton(
+                        enabled = !testInProgress,
+                        onClick = {
+                            secret = ""
+                            onRemoveCredential()
+                        },
+                    ) {
                         Text(ppText(language, "移除密钥", "Remove key"))
                     }
                 }
-                TextButton(onClick = clearAndDismiss) { Text(ppText(language, "取消", "Cancel")) }
+                TextButton(
+                    enabled = !testInProgress,
+                    onClick = clearAndDismiss,
+                ) { Text(ppText(language, "取消", "Cancel")) }
             }
         },
     )
