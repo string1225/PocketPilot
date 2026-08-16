@@ -37,6 +37,7 @@ import com.string1225.pocketpilot.security.SecureCredentialStore
 import com.string1225.pocketpilot.ui.PocketPilotService
 import com.string1225.pocketpilot.ui.OfflinePocketPilotService
 import com.string1225.pocketpilot.ui.RuntimePocketPilotService
+import com.string1225.pocketpilot.update.GitHubReleaseUpdateManager
 import java.io.File
 
 class PocketPilotApplication : Application() {
@@ -47,6 +48,8 @@ class PocketPilotApplication : Application() {
     lateinit var credentialStore: SecureCredentialStore
         private set
     lateinit var attachmentImageStore: AttachmentImageStore
+        private set
+    lateinit var updateManager: GitHubReleaseUpdateManager
         private set
 
     private var runtimeBridge: PocketPilotRuntimeBridge? = null
@@ -76,6 +79,7 @@ class PocketPilotApplication : Application() {
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
         attachmentImageStore = FileAttachmentImageStore(this)
+        updateManager = GitHubReleaseUpdateManager(this)
         settings.migrateLegacyLlmConnection(
             credentialConfigured = credentialStore.contains(CredentialIds.DEFAULT_LLM),
         )

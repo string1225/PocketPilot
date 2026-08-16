@@ -1,0 +1,422 @@
+name: PocketPilot Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  # Every stable tag shares one lock so an older, slower build cannot race a
+  # newer tag and mark itself Latest after the newer release completes.
+  group: pocketpilot-stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned GitHub CLI
+        shell: bash
+        env:
+          GH_CLI_VERSION: "2.97.0"
+          GH_CLI_LINUX_AMD64_SHA256: "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+        run: |
+          set -Eeuo pipefail
+
+          archive="$RUNNER_TEMP/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz"
+          extract_dir="$RUNNER_TEMP/pocketpilot-gh"
+          gh_bin="$extract_dir/gh"
+          download_url="https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz"
+
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --proto-redir '=https' \
+            --tlsv1.2 \
+            --connect-timeout 15 \
+            --max-time 120 \
+            --retry 3 \
+            --retry-all-errors \
+            --output "$archive" \
+            "$download_url"
+          printf '%s  %s\n' "$GH_CLI_LINUX_AMD64_SHA256" "$archive" \
+            | sha256sum --check --strict
+          tar \
+            --extract \
+            --gzip \
+            --file "$archive" \
+            --directory "$extract_dir" \
+            --strip-components=2 \
+            "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh"
+          chmod 0755 "$gh_bin"
+
+          actual_version="$(
+            "$gh_bin" --version \
+              | sed -n '1s/^gh version \([^[:space:]]*\).*/\1/p'
+          )"
+          if [[ "$actual_version" != "$GH_CLI_VERSION" ]]; then
+            echo "::error::Pinned GitHub CLI reported unexpected version: $actual_version"
+            exit 1
+          fi
+
+          echo "GH_BIN=$gh_bin" >> "$GITHUB_ENV"
+          echo "$extract_dir" >> "$GITHUB_PATH"
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          version_name="$({
+            sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+              apps/android/app/build.gradle.kts
+          } | head -n 1)"
+          version_code="$({
+            sed -n 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+              apps/android/app/build.gradle.kts
+          } | head -n 1)"
+
+          if [[ ! "$version_name" =~ ^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$ ]]; then
+            echo "::error::Android versionName must be a stable semantic version (for example 0.2.0)."
+            exit 1
+          fi
+          if [[ ! "$version_code" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Android versionCode must be a positive integer."
+            exit 1
+          fi
+
+          expected_tag="v${version_name}"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Android versionName $version_name (expected $expected_tag)."
+            exit 1
+          fi
+
+          git fetch --no-tags origin dev
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/dev; then
+            echo "::error::Release tags must point to a commit already pushed to origin/dev."
+            exit 1
+          fi
+
+          echo "version=$version_name" >> "$GITHUB_ENV"
+          echo "version_code=$version_code" >> "$GITHUB_ENV"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify TypeScript workspace
+        run: pnpm check
+
+      - name: Verify committed Android runtime asset
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          changes="$(git status --porcelain --untracked-files=all -- apps/android/app/src/main/assets/pocketpilot-runtime.js)"
+          if [[ -n "$changes" ]]; then
+            echo "$changes"
+            echo "::error::Run pnpm build and commit the generated Android runtime asset before releasing."
+            exit 1
+          fi
+
+      - name: Install Android SDK platform
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Build and verify signed release APK
+        working-directory: apps/android
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/pocketpilot-release.jks
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+
+          cleanup() {
+            rm -f "$ANDROID_RELEASE_KEYSTORE_PATH"
+          }
+          trap cleanup EXIT
+
+          for secret_name in \
+            ANDROID_RELEASE_KEYSTORE_BASE64 \
+            ANDROID_RELEASE_KEY_ALIAS \
+            ANDROID_RELEASE_STORE_PASSWORD \
+            ANDROID_RELEASE_KEY_PASSWORD; do
+            if [[ -z "${!secret_name:-}" ]]; then
+              echo "::error::Required GitHub Actions secret $secret_name is not configured."
+              exit 1
+            fi
+          done
+
+          if ! printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_RELEASE_KEYSTORE_PATH"; then
+            echo "::error::ANDROID_RELEASE_KEYSTORE_BASE64 is not valid base64."
+            exit 1
+          fi
+          chmod 600 "$ANDROID_RELEASE_KEYSTORE_PATH"
+
+          ./gradlew \
+            :sshj-android:test \
+            :app:testDebugUnitTest \
+            :app:lintRelease \
+            :app:assembleRelease \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace
+
+          source_apk="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$source_apk" ]]; then
+            echo "::error::Signed release APK was not produced at $source_apk."
+            exit 1
+          fi
+
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" \
+            verify --verbose --print-certs "$source_apk"
+
+          expected_certificate="$({
+            tr -d '[:space:]:' < app/release-signing-certificate.sha256
+          } | tr '[:upper:]' '[:lower:]')"
+          actual_certificate="$({
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" \
+              verify --print-certs "$source_apk" \
+              | sed -n 's/^Signer #1 certificate SHA-256 digest: //p'
+          } | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$expected_certificate" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Pinned release certificate fingerprint is invalid."
+            exit 1
+          fi
+          if [[ "$actual_certificate" != "$expected_certificate" ]]; then
+            echo "::error::Release APK certificate does not match the pinned PocketPilot signing certificate."
+            exit 1
+          fi
+
+          built_application_id="$(
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer" \
+              manifest application-id "$source_apk"
+          )"
+          built_version_name="$(
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer" \
+              manifest version-name "$source_apk"
+          )"
+          built_version_code="$(
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer" \
+              manifest version-code "$source_apk"
+          )"
+          if [[ "$built_application_id" != "com.string1225.pocketpilot" ]]; then
+            echo "::error::Unexpected APK application id: $built_application_id"
+            exit 1
+          fi
+          if [[ "$built_version_name" != "$version" ]]; then
+            echo "::error::Built APK versionName $built_version_name does not match release version $version."
+            exit 1
+          fi
+          if [[ "$built_version_code" != "$version_code" ]]; then
+            echo "::error::Built APK versionCode $built_version_code does not match configured versionCode $version_code."
+            exit 1
+          fi
+
+          previous_tag="$(
+            "$GH_BIN" release list \
+              --exclude-drafts \
+              --exclude-pre-releases \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName // ""' \
+              --repo "$GITHUB_REPOSITORY"
+          )"
+          if [[ -n "$previous_tag" && "$previous_tag" != "$GITHUB_REF_NAME" ]]; then
+            if [[ ! "$previous_tag" =~ ^v((0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8}))$ ]]; then
+              echo "::error::Latest published release has an unsupported tag: $previous_tag"
+              exit 1
+            fi
+            previous_version="${BASH_REMATCH[1]}"
+            IFS=. read -r current_major current_minor current_patch <<< "$version"
+            IFS=. read -r previous_major previous_minor previous_patch <<< "$previous_version"
+            if ((
+              current_major < previous_major ||
+              (current_major == previous_major && current_minor < previous_minor) ||
+              (current_major == previous_major && current_minor == previous_minor && current_patch <= previous_patch)
+            )); then
+              echo "::error::Release version $version must be greater than the latest stable release $previous_version."
+              exit 1
+            fi
+            previous_dir="$RUNNER_TEMP/pocketpilot-previous-release"
+            mkdir -p "$previous_dir"
+            "$GH_BIN" release download "$previous_tag" \
+              --pattern "pocketpilot-${previous_version}.apk" \
+              --dir "$previous_dir" \
+              --repo "$GITHUB_REPOSITORY"
+            previous_apk="$previous_dir/pocketpilot-${previous_version}.apk"
+            if [[ ! -f "$previous_apk" ]]; then
+              echo "::error::Latest release is missing its expected APK asset."
+              exit 1
+            fi
+            previous_version_code="$(
+              "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer" \
+                manifest version-code "$previous_apk"
+            )"
+            if [[ ! "$previous_version_code" =~ ^[0-9]+$ ]]; then
+              echo "::error::Latest release APK has an invalid versionCode."
+              exit 1
+            fi
+            if (( built_version_code <= previous_version_code )); then
+              echo "::error::versionCode $built_version_code must be greater than the latest release versionCode $previous_version_code."
+              exit 1
+            fi
+          fi
+
+          release_dir="$GITHUB_WORKSPACE/release"
+          apk_name="pocketpilot-${version}.apk"
+          mkdir -p "$release_dir"
+          cp "$source_apk" "$release_dir/$apk_name"
+          (
+            cd "$release_dir"
+            sha256sum "$apk_name" > "$apk_name.sha256"
+          )
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          apk="release/pocketpilot-${version}.apk"
+          checksum="${apk}.sha256"
+
+          latest_tag="$(
+            "$GH_BIN" release list \
+              --exclude-drafts \
+              --exclude-pre-releases \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName // ""' \
+              --repo "$GITHUB_REPOSITORY"
+          )"
+          if [[ -n "$latest_tag" && "$latest_tag" != "$GITHUB_REF_NAME" ]]; then
+            if [[ ! "$latest_tag" =~ ^v((0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8}))$ ]]; then
+              echo "::error::Latest published release has an unsupported tag: $latest_tag"
+              exit 1
+            fi
+            latest_version="${BASH_REMATCH[1]}"
+            IFS=. read -r current_major current_minor current_patch <<< "$version"
+            IFS=. read -r latest_major latest_minor latest_patch <<< "$latest_version"
+            if ((
+              current_major < latest_major ||
+              (current_major == latest_major && current_minor < latest_minor) ||
+              (current_major == latest_major && current_minor == latest_minor && current_patch <= latest_patch)
+            )); then
+              echo "::error::Refusing to replace Latest $latest_version with non-newer release $version."
+              exit 1
+            fi
+          fi
+
+          if "$GH_BIN" release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_flags="$(
+              "$GH_BIN" release view "$GITHUB_REF_NAME" \
+                --json isDraft,isPrerelease \
+                --jq '"\(.isDraft) \(.isPrerelease)"' \
+                --repo "$GITHUB_REPOSITORY"
+            )"
+            if [[ "$release_flags" != "false false" ]]; then
+              echo "::error::Existing release $GITHUB_REF_NAME is not a published stable release."
+              exit 1
+            fi
+            existing_assets="$(
+              "$GH_BIN" release view "$GITHUB_REF_NAME" \
+                --json assets \
+                --jq '.assets[].name' \
+                --repo "$GITHUB_REPOSITORY"
+            )"
+            for expected_asset in "${apk##*/}" "${checksum##*/}"; do
+              if ! grep -Fqx "$expected_asset" <<< "$existing_assets"; then
+                echo "::error::Existing release $GITHUB_REF_NAME is missing $expected_asset."
+                exit 1
+              fi
+            done
+            existing_dir="$RUNNER_TEMP/pocketpilot-existing-release"
+            mkdir -p "$existing_dir"
+            "$GH_BIN" release download "$GITHUB_REF_NAME" \
+              --pattern "${apk##*/}" \
+              --pattern "${checksum##*/}" \
+              --dir "$existing_dir" \
+              --repo "$GITHUB_REPOSITORY"
+            if ! cmp -s "$apk" "$existing_dir/${apk##*/}" || \
+               ! cmp -s "$checksum" "$existing_dir/${checksum##*/}"; then
+              echo "::error::Existing release assets differ from the reproducible assets built from this tag."
+              exit 1
+            fi
+            echo "Release $GITHUB_REF_NAME is already published; leaving its assets unchanged."
+          else
+            "$GH_BIN" release create "$GITHUB_REF_NAME" \
+              "$apk#PocketPilot Android APK" \
+              "$checksum#SHA-256 checksum" \
+              --title "PocketPilot ${version}" \
+              --fail-on-no-commits \
+              --generate-notes \
+              --latest \
+              --verify-tag \
+              --repo "$GITHUB_REPOSITORY"
+          fi
+
+          immutable="$(
+            "$GH_BIN" release view "$GITHUB_REF_NAME" \
+              --json isImmutable \
+              --jq .isImmutable \
+              --repo "$GITHUB_REPOSITORY"
+          )"
+          if [[ "$immutable" != "true" ]]; then
+            echo "::error::Published release is not immutable. Enable release immutability in repository settings."
+            exit 1
+          fi
+
+          verified=false
+          for attempt in 1 2 3 4 5; do
+            if "$GH_BIN" release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"; then
+              verified=true
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+          if [[ "$verified" != "true" ]]; then
+            echo "::error::GitHub release attestation could not be verified."
+            exit 1
+          fi

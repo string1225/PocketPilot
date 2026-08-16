@@ -123,6 +123,7 @@ fun PocketPilotApp(
                 gitCredentialConfigured = state.gitCredentialConfigured,
                 remoteServers = state.remoteServers,
                 plugins = state.plugins,
+                appUpdate = state.appUpdate,
                 onSettingsChange = viewModel::updateSettings,
                 onSaveLlmConnection = viewModel::saveLlmConnection,
                 onClearLlmConnectionTestResult = viewModel::clearLlmConnectionTestResult,
@@ -135,6 +136,10 @@ fun PocketPilotApp(
                 onInstallPluginBundle = viewModel::installPluginBundle,
                 onSetPluginEnabled = viewModel::setPluginEnabled,
                 onDeletePlugin = viewModel::deletePlugin,
+                onCheckForAppUpdate = viewModel::checkForAppUpdate,
+                onDownloadAndInstallAppUpdate = viewModel::downloadAndInstallAppUpdate,
+                onInstallAppUpdate = viewModel::installAppUpdate,
+                onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
                 onBack = { showSettings = false },
             )
         } else {

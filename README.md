@@ -2,7 +2,7 @@
 
 PocketPilot 是一个去中心化 Android Agent Workspace：手机保存项目、会话、Workspace、Checkpoint 和凭据引用，TypeScript Agent 通过受控 Tool 操作本地项目，并可把命令交给用户自己的 SSH 服务器。
 
-当前 `0.1.0` 已打通：
+当前 `0.2.0` 已打通：
 
 ```text
 Compose Chat
@@ -74,6 +74,14 @@ apps/android/app/build/outputs/apk/debug/app-debug.apk
 
 GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模拟器执行 instrumentation tests，并上传 7 天有效的 Debug APK artifact。
 
+## 发布与更新
+
+每轮代码变更都需要增加 Android `versionCode`/`versionName`，完成验证后 commit、push `origin/dev`，再运行 `scripts/release.ps1`。脚本推送 `v<versionName>` tag；GitHub Actions 会构建并验证使用固定发布密钥签名的 APK，生成 `pocketpilot-<version>.apk` 和对应 `.sha256`，并创建 GitHub Latest Release。
+
+应用内更新只覆盖 APK，不会主动修改 SQLite、Android Keystore、项目目录、会话或 Checkpoint。这个保障依赖包名不变、`versionCode` 递增和所有版本始终使用同一发布签名；不得卸载应用、清除数据或遗失/替换发布密钥。普通 Android 应用不能静默安装，下载与校验完成后仍需用户在系统安装器中确认。
+
+完整的密钥配置、发布步骤、安全校验与升级验收见 [发布与应用内更新](docs/RELEASES_AND_UPDATES.md)。
+
 ## 首次运行
 
 1. 打开左上角设置。
@@ -105,7 +113,8 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 - [技术规划与实施方案](docs/TECHNICAL_PLAN.md)
 - [Android 模拟器、USB/无线真机接入与测试指南](docs/PHONE_TESTING.md)
 - [HTTP、沙箱脚本、插件包与 SSH 配置](docs/TOOLS_AND_PLUGINS.md)
+- [GitHub Release 与应用内更新](docs/RELEASES_AND_UPDATES.md)
 
 ## 分支与提交
 
-开发分支固定为 `dev` 并跟踪 `origin/dev`。PocketPilot 的自动 Checkpoint 与 Git Commit 是两套独立历史；恢复 Checkpoint 只恢复 Workspace，不移动 Git HEAD。
+开发分支固定为 `dev` 并跟踪 `origin/dev`。每轮开发提交并推送后都从该 commit 发布一个新的稳定版本；同一个 tag 不得复用。PocketPilot 的自动 Checkpoint 与 Git Commit 是两套独立历史；恢复 Checkpoint 只恢复 Workspace，不移动 Git HEAD。

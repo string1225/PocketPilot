@@ -15,6 +15,7 @@ import androidx.compose.material3.SnackbarHostState
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.update.UpdateState
 import org.junit.Rule
 import org.junit.Test
 
@@ -95,6 +96,10 @@ class ModelConnectionLoadingUiTest {
                 gitCredentialConfigured = false,
                 remoteServers = emptyList(),
                 plugins = emptyList(),
+                appUpdate = UpdateState(
+                    currentVersionName = "0.1.0",
+                    currentVersionCode = 1L,
+                ),
                 onSettingsChange = {},
                 onSaveLlmConnection = { _, _ -> },
                 onClearLlmConnectionTestResult = {},
@@ -107,6 +112,10 @@ class ModelConnectionLoadingUiTest {
                 onInstallPluginBundle = {},
                 onSetPluginEnabled = { _, _ -> },
                 onDeletePlugin = {},
+                onCheckForAppUpdate = {},
+                onDownloadAndInstallAppUpdate = {},
+                onInstallAppUpdate = {},
+                onOpenUnknownSourcesSettings = {},
                 onBack = {},
             )
         }

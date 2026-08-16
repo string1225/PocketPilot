@@ -25,7 +25,11 @@ import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.model.WorkspaceEntry
+import com.string1225.pocketpilot.update.GitHubReleaseUpdateManager
+import com.string1225.pocketpilot.update.UpdatePhase
+import com.string1225.pocketpilot.update.UpdateState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -80,6 +84,7 @@ data class PocketPilotUiState(
     val gitCredentialConfigured: Boolean = false,
     val remoteServers: List<RemoteServerProfile> = emptyList(),
     val plugins: List<InstalledPlugin> = emptyList(),
+    val appUpdate: UpdateState,
     val confirmDeepLinkDiscard: Boolean = false,
 ) {
     val selectedProject: Project?
@@ -96,11 +101,13 @@ class PocketPilotViewModel(
     private val service: PocketPilotService,
     private val coordinator: AgentRunCoordinator,
     private val attachmentImporter: ChatImageAttachmentImporter,
+    private val updateManager: GitHubReleaseUpdateManager,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(
         PocketPilotUiState(
             offlineDemo = service.isOfflineDemo,
             runtimeAvailable = service.runtimeAvailable,
+            appUpdate = updateManager.state.value,
         ),
     )
     val state: StateFlow<PocketPilotUiState> = mutableState.asStateFlow()
@@ -118,8 +125,28 @@ class PocketPilotViewModel(
     private val settingsMutex = Mutex()
     private var draftGeneration = 0L
     private var llmConnectionTestJob: Job? = null
+    private var appUpdateOperationJob: Job? = null
+    private var lastObservedUpdatePhase = updateManager.state.value.phase
+    private var notifiedAvailableVersion: String? = null
 
     init {
+        viewModelScope.launch {
+            updateManager.state.collect { updateState ->
+                val previousPhase = lastObservedUpdatePhase
+                lastObservedUpdatePhase = updateState.phase
+                mutableState.update { it.copy(appUpdate = updateState) }
+                val availableVersion = updateState.release?.versionName
+                if (shouldNotifyAvailableUpdate(previousPhase, updateState, notifiedAvailableVersion)) {
+                    notifiedAvailableVersion = availableVersion
+                    postNotice(
+                        localized(
+                            "PocketPilot $availableVersion 可更新，请在设置的“版本更新”中下载并安装",
+                            "PocketPilot $availableVersion is available. Open App update in Settings to install it.",
+                        ),
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             combine(
                 coordinator.runs,
@@ -189,6 +216,7 @@ class PocketPilotViewModel(
             succeeded = true
         }
         if (succeeded) {
+            launchUpdateOperation(notifyFailure = false) { updateManager.check(force = false) }
             val target = pendingConversationTarget
             pendingConversationTarget = null
             target?.let(::navigateToConversation)
@@ -793,6 +821,41 @@ class PocketPilotViewModel(
     fun setLanguage(language: AppLanguage) =
         updateSettings(mutableState.value.settings.copy(language = language))
 
+    fun checkForAppUpdate() {
+        launchUpdateOperation { updateManager.check(force = true) }
+    }
+
+    fun downloadAndInstallAppUpdate() {
+        launchUpdateOperation {
+            updateManager.download()
+            if (updateManager.state.value.phase == UpdatePhase.READY_TO_INSTALL) {
+                updateManager.install()
+            }
+        }
+    }
+
+    fun installAppUpdate() {
+        launchUpdateOperation {
+            updateManager.install()
+        }
+    }
+
+    fun openUnknownSourcesSettings() {
+        try {
+            if (!updateManager.openUnknownSourcesSettings()) {
+                postNotice(
+                    localized(
+                        "无法打开安装权限设置，请在系统设置中允许 PocketPilot 安装未知应用",
+                        "Could not open install access. Allow PocketPilot to install unknown apps in system settings.",
+                    ),
+                    isError = true,
+                )
+            }
+        } catch (error: Throwable) {
+            postNotice(error.displayMessage(), isError = true)
+        }
+    }
+
     fun saveLlmConnection(updatedSettings: PocketPilotSettings, rawSecret: String?) {
         if (llmConnectionTestJob?.isActive == true) return
         mutableState.update {
@@ -1123,6 +1186,27 @@ class PocketPilotViewModel(
         }
     }
 
+    private fun launchUpdateOperation(
+        notifyFailure: Boolean = true,
+        block: suspend () -> Unit,
+    ) {
+        if (appUpdateOperationJob?.isActive == true) return
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                block()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (notifyFailure) postNotice(error.displayMessage(), isError = true)
+            }
+        }
+        appUpdateOperationJob = job
+        job.invokeOnCompletion {
+            if (appUpdateOperationJob === job) appUpdateOperationJob = null
+        }
+        job.start()
+    }
+
     private fun postBusyNotice() {
         postNotice(
             localized("请先停止当前 Agent Run", "Stop the current Agent run first"),
@@ -1206,11 +1290,12 @@ class PocketPilotViewModel(
         private val service: PocketPilotService,
         private val coordinator: AgentRunCoordinator,
         private val attachmentImporter: ChatImageAttachmentImporter,
+        private val updateManager: GitHubReleaseUpdateManager,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(PocketPilotViewModel::class.java))
-            return PocketPilotViewModel(service, coordinator, attachmentImporter) as T
+            return PocketPilotViewModel(service, coordinator, attachmentImporter, updateManager) as T
         }
     }
 }
@@ -1314,3 +1399,15 @@ private val AgentRunStatus.isTerminal: Boolean
 private fun Throwable.displayMessage(): String = message?.takeIf { it.isNotBlank() } ?: "发生未知错误"
 
 private const val MAX_CHAT_ATTACHMENTS = 6
+
+internal fun shouldNotifyAvailableUpdate(
+    previousPhase: UpdatePhase,
+    currentState: UpdateState,
+    notifiedVersion: String?,
+): Boolean {
+    val version = currentState.release?.versionName
+    return currentState.phase == UpdatePhase.AVAILABLE &&
+        (previousPhase == UpdatePhase.IDLE || previousPhase == UpdatePhase.CHECKING) &&
+        !version.isNullOrBlank() &&
+        notifiedVersion != version
+}

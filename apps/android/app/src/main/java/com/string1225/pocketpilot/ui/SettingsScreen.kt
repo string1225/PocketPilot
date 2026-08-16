@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -67,6 +72,9 @@ import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.SshAuthType
 import com.string1225.pocketpilot.model.ThemePreference
+import com.string1225.pocketpilot.update.UpdatePhase
+import com.string1225.pocketpilot.update.UpdateState
+import java.util.Locale
 import java.util.UUID
 
 private enum class EditableSetting {
@@ -85,6 +93,7 @@ fun SettingsScreen(
     gitCredentialConfigured: Boolean,
     remoteServers: List<RemoteServerProfile>,
     plugins: List<InstalledPlugin>,
+    appUpdate: UpdateState,
     onSettingsChange: (PocketPilotSettings) -> Unit,
     onSaveLlmConnection: (PocketPilotSettings, String?) -> Unit,
     onClearLlmConnectionTestResult: () -> Unit,
@@ -97,6 +106,10 @@ fun SettingsScreen(
     onInstallPluginBundle: (String) -> Unit,
     onSetPluginEnabled: (String, Boolean) -> Unit,
     onDeletePlugin: (String) -> Unit,
+    onCheckForAppUpdate: () -> Unit,
+    onDownloadAndInstallAppUpdate: () -> Unit,
+    onInstallAppUpdate: () -> Unit,
+    onOpenUnknownSourcesSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     val language = settings.language
@@ -108,6 +121,7 @@ fun SettingsScreen(
     var showGitCredential by rememberSaveable { mutableStateOf(false) }
     var showTools by rememberSaveable { mutableStateOf(false) }
     var showPlugins by rememberSaveable { mutableStateOf(false) }
+    var showAppUpdate by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -128,7 +142,8 @@ fun SettingsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .testTag(SETTINGS_LIST_TEST_TAG),
         ) {
             item {
                 SettingsHeader(
@@ -241,6 +256,14 @@ fun SettingsScreen(
                     title = ppText(language, "语言", "Language"),
                     value = settings.language.label(),
                     onClick = { showLanguage = true },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.SystemUpdate,
+                    title = ppText(language, "版本更新", "App update"),
+                    value = appUpdate.summary(language),
+                    onClick = { showAppUpdate = true },
                 )
             }
             item {
@@ -375,6 +398,18 @@ fun SettingsScreen(
             onDismiss = { showLanguage = false },
         )
     }
+
+    if (showAppUpdate) {
+        AppUpdateDialog(
+            state = appUpdate,
+            language = language,
+            onCheck = onCheckForAppUpdate,
+            onDownloadAndInstall = onDownloadAndInstallAppUpdate,
+            onInstall = onInstallAppUpdate,
+            onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
+            onDismiss = { showAppUpdate = false },
+        )
+    }
 }
 
 @Composable
@@ -418,6 +453,270 @@ private fun SettingsToggleRow(
         trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
     )
 }
+
+@Composable
+private fun AppUpdateDialog(
+    state: UpdateState,
+    language: AppLanguage,
+    onCheck: () -> Unit,
+    onDownloadAndInstall: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenUnknownSourcesSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val release = state.release
+    val totalBytes = state.totalBytes?.takeIf { it > 0L }
+    val progress = totalBytes?.let {
+        (state.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 1f)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(ppText(language, "版本更新", "App update")) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    ppText(
+                        language,
+                        "当前版本 ${state.currentVersionName}（${state.currentVersionCode}）",
+                        "Current version ${state.currentVersionName} (${state.currentVersionCode})",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                release?.let {
+                    Text(
+                        ppText(
+                            language,
+                            "最新版本 ${it.versionName}",
+                            "Latest version ${it.versionName}",
+                        ),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (it.title.isNotBlank() && it.title != it.versionName && it.title != it.tagName) {
+                        Text(it.title, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (it.body.isNotBlank()) {
+                        Text(
+                            it.body.take(MAX_VISIBLE_RELEASE_NOTES_CHARS),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 8,
+                        )
+                    }
+                }
+
+                when (state.phase) {
+                    UpdatePhase.CHECKING -> UpdateBusyRow(
+                        ppText(language, "正在检查 GitHub Release…", "Checking GitHub Releases…"),
+                    )
+
+                    UpdatePhase.DOWNLOADING -> {
+                        Text(
+                            ppText(
+                                language,
+                                "正在下载 ${formatByteCount(state.bytesDownloaded)}" +
+                                    (totalBytes?.let { " / ${formatByteCount(it)}" } ?: ""),
+                                "Downloading ${formatByteCount(state.bytesDownloaded)}" +
+                                    (totalBytes?.let { " / ${formatByteCount(it)}" } ?: ""),
+                            ),
+                        )
+                        if (progress == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+
+                    UpdatePhase.UP_TO_DATE -> Text(
+                        ppText(language, "当前已是最新版本。", "PocketPilot is up to date."),
+                    )
+
+                    UpdatePhase.AVAILABLE -> Text(
+                        ppText(
+                            language,
+                            "发现新版本。点击“下载并安装”后，PocketPilot 会先校验安装包，再打开 Android 系统安装确认。",
+                            "A new version is available. Download & install verifies the APK before opening Android's installer.",
+                        ),
+                    )
+
+                    UpdatePhase.READY_TO_INSTALL -> Text(
+                        ppText(
+                            language,
+                            "安装包已下载并通过校验，可以打开系统安装器。",
+                            "The APK is downloaded and verified. It is ready for Android's installer.",
+                        ),
+                    )
+
+                    UpdatePhase.INSTALL_PERMISSION_REQUIRED -> {
+                        Text(
+                            ppText(
+                                language,
+                                "Android 需要你允许 PocketPilot 安装未知应用。打开授权页并允许后，返回这里继续安装。",
+                                "Android needs permission for PocketPilot to install unknown apps. Enable it, return here, then continue installation.",
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = onInstall) {
+                            Text(ppText(language, "已授权，继续安装", "Permission granted, continue"))
+                        }
+                    }
+
+                    UpdatePhase.INSTALL_LAUNCHED -> Text(
+                        ppText(
+                            language,
+                            "系统安装器已打开；确认安装即可完成更新。",
+                            "Android's installer is open. Confirm there to finish the update.",
+                        ),
+                    )
+
+                    UpdatePhase.ERROR -> Text(
+                        state.errorMessage?.takeIf { it.isNotBlank() }
+                            ?: ppText(language, "更新失败，请重试。", "Update failed. Try again."),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                    UpdatePhase.IDLE,
+                    UpdatePhase.THROTTLED,
+                    -> Text(
+                        ppText(
+                            language,
+                            "PocketPilot 会在启动后自动检查，也可以立即手动检查。",
+                            "PocketPilot checks automatically after startup, or you can check now.",
+                        ),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    ppText(
+                        language,
+                        "更新采用覆盖安装，不会清除模型 AK、项目、会话、工作区或其他应用私有文件。",
+                        "Updates install in place and do not clear model keys, projects, chats, workspaces, or other private app files.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            when (state.phase) {
+                UpdatePhase.CHECKING,
+                UpdatePhase.DOWNLOADING,
+                -> TextButton(onClick = {}, enabled = false) {
+                    Text(ppText(language, "请稍候", "Please wait"))
+                }
+
+                UpdatePhase.AVAILABLE -> TextButton(onClick = onDownloadAndInstall) {
+                    Text(ppText(language, "下载并安装", "Download & install"))
+                }
+
+                UpdatePhase.READY_TO_INSTALL,
+                UpdatePhase.INSTALL_LAUNCHED,
+                -> TextButton(onClick = onInstall) {
+                    Text(ppText(language, "安装更新", "Install update"))
+                }
+
+                UpdatePhase.INSTALL_PERMISSION_REQUIRED -> TextButton(onClick = onOpenUnknownSourcesSettings) {
+                    Text(ppText(language, "打开授权设置", "Open install access"))
+                }
+
+                UpdatePhase.ERROR -> TextButton(
+                    onClick = if (release == null) onCheck else onDownloadAndInstall,
+                ) {
+                    Text(ppText(language, "重试", "Retry"))
+                }
+
+                UpdatePhase.IDLE,
+                UpdatePhase.THROTTLED,
+                UpdatePhase.UP_TO_DATE,
+                -> TextButton(onClick = onCheck) {
+                    Text(ppText(language, "检查更新", "Check for updates"))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(ppText(language, "关闭", "Close"))
+            }
+        },
+    )
+}
+
+@Composable
+private fun UpdateBusyRow(label: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        Text(label)
+    }
+}
+
+private fun UpdateState.summary(language: AppLanguage): String = when (phase) {
+    UpdatePhase.CHECKING -> ppText(language, "正在检查…", "Checking…")
+    UpdatePhase.THROTTLED -> ppText(
+        language,
+        "已开启启动自动检查 · 当前 ${currentVersionName}",
+        "Startup checks enabled · Current ${currentVersionName}",
+    )
+    UpdatePhase.UP_TO_DATE -> ppText(
+        language,
+        "已是最新版本 · ${currentVersionName}",
+        "Up to date · ${currentVersionName}",
+    )
+    UpdatePhase.AVAILABLE -> ppText(
+        language,
+        "新版本 ${release?.versionName.orEmpty()} 可用",
+        "Version ${release?.versionName.orEmpty()} available",
+    )
+    UpdatePhase.DOWNLOADING -> {
+        val percentage = totalBytes
+            ?.takeIf { it > 0L }
+            ?.let { ((bytesDownloaded * 100L) / it).coerceIn(0L, 100L) }
+        if (percentage == null) {
+            ppText(language, "正在下载更新…", "Downloading update…")
+        } else {
+            ppText(language, "正在下载更新 · $percentage%", "Downloading update · $percentage%")
+        }
+    }
+    UpdatePhase.READY_TO_INSTALL -> ppText(
+        language,
+        "新版本 ${release?.versionName.orEmpty()} 已就绪",
+        "Version ${release?.versionName.orEmpty()} is ready",
+    )
+    UpdatePhase.INSTALL_PERMISSION_REQUIRED -> ppText(
+        language,
+        "需要安装权限 · 点击继续",
+        "Install access required · Tap to continue",
+    )
+    UpdatePhase.INSTALL_LAUNCHED -> ppText(
+        language,
+        "等待系统安装确认",
+        "Waiting for Android installer",
+    )
+    UpdatePhase.ERROR -> ppText(language, "更新失败 · 点击查看", "Update failed · Tap for details")
+    UpdatePhase.IDLE -> ppText(
+        language,
+        "当前版本 ${currentVersionName} · 启动时自动检查",
+        "Current ${currentVersionName} · Checks at startup",
+    )
+}
+
+private fun formatByteCount(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes.toDouble() / (1024L * 1024L))
+    bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes.toDouble() / 1024L)
+    else -> "$bytes B"
+}
+
+private const val MAX_VISIBLE_RELEASE_NOTES_CHARS = 1_500
+internal const val SETTINGS_LIST_TEST_TAG = "settings-list"
 
 @Composable
 private fun EditableSettingDialog(

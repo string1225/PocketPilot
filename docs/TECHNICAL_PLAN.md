@@ -204,6 +204,10 @@ Pop-Location
 
 GitHub Actions 在 `dev/main` 运行同一 TypeScript/Android 构建，并上传 Debug APK artifact。
 
+Tag `v<versionName>` 另触发 Release workflow。Workflow 只接受已经位于 `origin/dev` 的 tag commit，使用 GitHub Actions Secrets 中的固定发布密钥构建 APK，并在 `apksigner` 通过后发布 `pocketpilot-<version>.apk` 与 SHA-256 文件。App 检查官方仓库 Latest Release，下载后同时验证摘要、包名、递增的 `versionCode` 和与当前安装相同的签名证书，再交给系统安装器确认覆盖升级。
+
+升级不执行数据库重建、项目导入或凭据迁移；相同 `applicationId` 与签名下的 Android package update 会保留 App 私有数据。发布密钥不可更换或提交到仓库。详见 [发布与应用内更新](RELEASES_AND_UPDATES.md)。
+
 ## 9. 后续路线
 
 1. 跨进程重启恢复运行中的模型请求；当前版本已支持 Chat Completions SSE 增量显示、Token usage 和进程内 FIFO 消息队列。
@@ -217,4 +221,5 @@ GitHub Actions 在 `dev/main` 运行同一 TypeScript/Android 构建，并上传
 
 - 日常开发固定在 `dev`，跟踪 `origin/dev`。
 - 每轮完成后运行验证、只 stage 预期文件、commit 并 push `origin/dev`。
+- 每轮同时增加 `versionCode`/`versionName`，从已 push 的 commit 创建唯一 `v<versionName>` tag，并等待 GitHub Release 成功。
 - PocketPilot Checkpoint 与 Git Commit 永远保持独立。

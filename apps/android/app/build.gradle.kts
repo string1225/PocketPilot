@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseKeystorePath = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE_PATH").orNull
+val releaseKeyAlias = providers.environmentVariable("ANDROID_RELEASE_KEY_ALIAS").orNull
+val releaseStorePassword = providers.environmentVariable("ANDROID_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyPassword = providers.environmentVariable("ANDROID_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningConfigured = listOf(
+    releaseKeystorePath,
+    releaseKeyAlias,
+    releaseStorePassword,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.string1225.pocketpilot"
     compileSdk = 36
@@ -11,8 +22,8 @@ android {
         applicationId = "com.string1225.pocketpilot"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -20,6 +31,21 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file(releaseKeystorePath ?: "build/missing-pocketpilot-release-key.jks")
+            storePassword = releaseStorePassword ?: ""
+            keyAlias = releaseKeyAlias ?: ""
+            keyPassword = releaseKeyPassword ?: ""
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {
@@ -88,4 +114,24 @@ val verifyAgentRuntimeAsset by tasks.registering {
 
 tasks.named("preBuild").configure {
     dependsOn(verifyAgentRuntimeAsset)
+}
+
+val verifyReleaseSigning by tasks.registering {
+    notCompatibleWithConfigurationCache(
+        "Release signing validation reads process environment and the local keystore path.",
+    )
+    doLast {
+        check(releaseSigningConfigured) {
+            "Release signing is not configured. Set ANDROID_RELEASE_KEYSTORE_PATH, " +
+                "ANDROID_RELEASE_KEY_ALIAS, ANDROID_RELEASE_STORE_PASSWORD, and " +
+                "ANDROID_RELEASE_KEY_PASSWORD."
+        }
+        check(requireNotNull(releaseKeystorePath).let(::file).isFile) {
+            "ANDROID_RELEASE_KEYSTORE_PATH does not point to a release keystore."
+        }
+    }
+}
+
+tasks.matching { it.name == "packageRelease" }.configureEach {
+    dependsOn(verifyReleaseSigning)
 }

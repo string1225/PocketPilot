@@ -52,6 +52,8 @@ APK：
 apps\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
+这个 Debug APK 只用于模拟器或可清空的开发测试机。它使用开发签名，不能覆盖 GitHub Release 的正式签名安装，也不能作为“保留数据升级到 Release”的基线。保存真实项目和凭据的日常手机应从 GitHub Release APK 开始安装，并始终沿用 Release 更新通道。
+
 ## 3. 本机模拟器
 
 Android Studio 中打开 `Tools > Device Manager`，创建并启动 API 36 设备。当前开发环境使用的 AVD 名称是：
@@ -107,6 +109,8 @@ adb devices -l
 - 多设备：后续命令添加 `-s <SERIAL>`。
 
 安装、启动和日志：
+
+下面的 Debug 安装命令仍只适用于可清空的开发测试机；日常手机请下载并安装 GitHub Release 页面中的 `pocketpilot-<version>.apk`。不要在已有 Release 数据的手机上用 Debug APK 覆盖或运行 instrumentation tests。
 
 ```powershell
 adb install -r .\apps\android\app\build\outputs\apk\debug\app-debug.apk
@@ -219,7 +223,22 @@ adb shell dumpsys activity services com.string1225.pocketpilot
 adb shell dumpsys notification --noredact | Select-String PocketPilot
 ```
 
-## 11. 把手机交给 Codex 测试
+## 11. 应用内更新与数据保留 Smoke Test
+
+只在使用正式发布签名、可验证数据的测试设备上执行。上一版基线必须也是 GitHub Release APK；Debug APK 与 Release APK 签名不同，无法用来验证无损覆盖升级。不要使用 `adb uninstall`、`pm clear` 或 `connectedAndroidTest`：这些操作会使“升级后数据保留”的结果失真，甚至直接删除数据。
+
+1. 安装上一版 GitHub Release APK，创建两个项目、两个会话、一个文件和一个 Checkpoint。
+2. 在设置中保存专用测试模型连接和 SSH/Git 凭据；只记录“已配置”状态，不导出或截图明文。
+3. 打开“设置 > 版本更新”，检查最新 Release；确认展示版本高于当前版本。
+4. 下载后断网，再点击安装；这可确认安装使用的是已校验的本地 APK，而不是浏览器页面。
+5. Android 8.0+ 首次使用时，系统可能要求允许 PocketPilot“安装未知应用”。授权后返回 App，再次点击安装并在系统安装器确认更新。
+6. 更新后打开 PocketPilot，确认版本号变化，项目、会话、文件、Checkpoint、模型连接和服务器配置仍然存在。
+7. 运行 `/list`，再执行一次模型连接测试；确认 Workspace、SQLite 和 Android Keystore 都可正常读取。
+8. 再次检查更新，应显示已经是最新版，不重复下载或尝试降级。
+
+若系统报告“应用未安装”或签名冲突，停止测试并核对发布证书。不要卸载旧版本继续安装，因为卸载会删除应用私有文件、数据库和 Keystore 密文。详细发布与签名约束见 [发布与应用内更新](RELEASES_AND_UPDATES.md)。
+
+## 12. 把手机交给 Codex 测试
 
 完成三项即可：
 
