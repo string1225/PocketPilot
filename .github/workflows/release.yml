@@ -390,7 +390,6 @@ jobs:
               "$apk#PocketPilot Android APK" \
               "$checksum#SHA-256 checksum" \
               --title "PocketPilot ${version}" \
-              --fail-on-no-commits \
               --generate-notes \
               --latest \
               --verify-tag \

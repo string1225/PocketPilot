@@ -2,7 +2,7 @@
 
 PocketPilot 是一个去中心化 Android Agent Workspace：手机保存项目、会话、Workspace、Checkpoint 和凭据引用，TypeScript Agent 通过受控 Tool 操作本地项目，并可把命令交给用户自己的 SSH 服务器。
 
-当前 `0.3.0` 已打通：
+当前 `0.3.1` 已打通：
 
 ```text
 Compose Chat
