@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -77,6 +78,11 @@ data class PocketPilotUiState(
     val offlineDemo: Boolean = true,
     val runtimeAvailable: Boolean = true,
     val settings: PocketPilotSettings = PocketPilotSettings(),
+    val onboardingCompleted: Boolean? = null,
+    val onboardingProjectSetupInProgress: Boolean = false,
+    val onboardingProjectSetupSucceeded: Boolean = false,
+    val onboardingProjectSetupError: String? = null,
+    val onboardingCompletionInProgress: Boolean = false,
     val llmCredentialConfigured: Boolean = false,
     val llmConnectionTestInProgress: Boolean = false,
     val llmConnectionTestSucceeded: Boolean? = null,
@@ -125,6 +131,7 @@ class PocketPilotViewModel(
     private val settingsMutex = Mutex()
     private var draftGeneration = 0L
     private var llmConnectionTestJob: Job? = null
+    private var onboardingProjectSetupJob: Job? = null
     private var appUpdateOperationJob: Job? = null
     private var lastObservedUpdatePhase = updateManager.state.value.phase
     private var notifiedAvailableVersion: String? = null
@@ -178,6 +185,8 @@ class PocketPilotViewModel(
                     conversations = conversations,
                     selected = selected,
                     settings = settings,
+                    onboardingCompleted = service.isOnboardingCompleted(),
+                    onboardingProjectSetupSucceeded = service.isOnboardingProjectConfigured(),
                     files = service.listFiles(selected.projectId),
                     checkpoints = service.listCheckpoints(selected.projectId),
                     timeline = service.listMessages(selected.id).map { it.toTimelineItem() },
@@ -198,6 +207,8 @@ class PocketPilotViewModel(
                     checkpoints = snapshot.checkpoints,
                     timeline = snapshot.timeline,
                     settings = snapshot.settings,
+                    onboardingCompleted = snapshot.onboardingCompleted,
+                    onboardingProjectSetupSucceeded = snapshot.onboardingProjectSetupSucceeded,
                     llmCredentialConfigured = snapshot.llmCredentialConfigured,
                     gitCredentialConfigured = snapshot.gitCredentialConfigured,
                     remoteServers = snapshot.remoteServers,
@@ -256,6 +267,173 @@ class PocketPilotViewModel(
                 postNotice(localized("已创建 ${result.project.name}", "Created ${result.project.name}"))
             }
         }
+    }
+
+    fun configureOnboardingLocalProject(name: String) {
+        launchOnboardingProjectSetup {
+            service.createProject(name)
+        }
+    }
+
+    fun configureOnboardingGitProject(
+        name: String,
+        remoteUrl: String,
+        branch: String?,
+        username: String,
+        useStoredCredential: Boolean,
+        rawToken: String?,
+    ) {
+        if (onboardingProjectSetupJob?.isActive == true) return
+        val token = rawToken?.takeIf(String::isNotEmpty)?.toCharArray()
+        mutableState.update {
+            it.copy(
+                onboardingProjectSetupInProgress = true,
+                onboardingProjectSetupSucceeded = false,
+                onboardingProjectSetupError = null,
+            )
+        }
+        onboardingProjectSetupJob = viewModelScope.launch {
+            try {
+                val project = runInterruptible(Dispatchers.IO) {
+                    service.createProjectFromGit(
+                        name = name,
+                        remoteUrl = remoteUrl,
+                        branch = branch,
+                        username = username,
+                        useStoredCredential = useStoredCredential,
+                        newToken = token,
+                    )
+                }
+                val selection = withContext(Dispatchers.IO) {
+                    selectionForNewProject(project).also {
+                        service.markOnboardingProjectConfigured(project.id)
+                    }
+                }
+                applySelection(selection)
+                val credentialConfigured = withContext(Dispatchers.IO) { service.hasGitCredential() }
+                mutableState.update {
+                    it.copy(
+                        gitCredentialConfigured = credentialConfigured,
+                        onboardingProjectSetupInProgress = false,
+                        onboardingProjectSetupSucceeded = true,
+                        onboardingProjectSetupError = null,
+                    )
+                }
+                postNotice(localized("Git 项目已克隆", "Git project cloned"))
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(onboardingProjectSetupInProgress = false) }
+                throw cancelled
+            } catch (error: Throwable) {
+                val message = error.displayMessage()
+                mutableState.update {
+                    it.copy(
+                        onboardingProjectSetupInProgress = false,
+                        onboardingProjectSetupSucceeded = false,
+                        onboardingProjectSetupError = message,
+                    )
+                }
+                postNotice(message, isError = true)
+            } finally {
+                token?.fill('\u0000')
+            }
+        }
+    }
+
+    fun clearOnboardingProjectSetupResult() {
+        if (onboardingProjectSetupJob?.isActive == true) return
+        mutableState.update {
+            it.copy(
+                onboardingProjectSetupSucceeded = false,
+                onboardingProjectSetupError = null,
+            )
+        }
+    }
+
+    fun completeOnboarding() {
+        val snapshot = mutableState.value
+        if (snapshot.onboardingCompletionInProgress || snapshot.onboardingCompleted != false) return
+        if (onboardingProjectSetupJob?.isActive == true || llmConnectionTestJob?.isActive == true) {
+            postNotice(localized("请等待当前配置完成", "Wait for the current setup to finish"), isError = true)
+            return
+        }
+        if (!snapshot.llmCredentialConfigured) {
+            postNotice(localized("请先完成模型连接测试", "Complete the model connection test first"), isError = true)
+            return
+        }
+        mutableState.update { it.copy(onboardingCompletionInProgress = true) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { service.completeOnboarding() }
+                mutableState.update {
+                    it.copy(
+                        onboardingCompleted = true,
+                        onboardingCompletionInProgress = false,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(onboardingCompletionInProgress = false) }
+                throw cancelled
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(onboardingCompletionInProgress = false) }
+                postNotice(error.displayMessage(), isError = true)
+            }
+        }
+    }
+
+    private fun launchOnboardingProjectSetup(createProject: suspend () -> Project) {
+        if (onboardingProjectSetupJob?.isActive == true) return
+        mutableState.update {
+            it.copy(
+                onboardingProjectSetupInProgress = true,
+                onboardingProjectSetupSucceeded = false,
+                onboardingProjectSetupError = null,
+            )
+        }
+        onboardingProjectSetupJob = viewModelScope.launch {
+            try {
+                val selection = withContext(Dispatchers.IO) {
+                    val project = createProject()
+                    selectionForNewProject(project).also {
+                        service.markOnboardingProjectConfigured(project.id)
+                    }
+                }
+                applySelection(selection)
+                mutableState.update {
+                    it.copy(
+                        onboardingProjectSetupInProgress = false,
+                        onboardingProjectSetupSucceeded = true,
+                        onboardingProjectSetupError = null,
+                    )
+                }
+                postNotice(localized("本地项目已创建", "Local project created"))
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(onboardingProjectSetupInProgress = false) }
+                throw cancelled
+            } catch (error: Throwable) {
+                val message = error.displayMessage()
+                mutableState.update {
+                    it.copy(
+                        onboardingProjectSetupInProgress = false,
+                        onboardingProjectSetupSucceeded = false,
+                        onboardingProjectSetupError = message,
+                    )
+                }
+                postNotice(message, isError = true)
+            }
+        }
+    }
+
+    private suspend fun selectionForNewProject(project: Project): ProjectSelection {
+        val conversation = service.createConversation(
+            project.id,
+            defaultConversationTitle(mutableState.value.settings.language),
+        )
+        return ProjectSelection(
+            projects = service.listProjects(),
+            conversations = service.listConversations(),
+            project = project,
+            conversation = conversation,
+        )
     }
 
     fun deleteProject(projectId: String) {
@@ -1309,6 +1487,8 @@ private data class InitialSnapshot(
     val conversations: List<Conversation>,
     val selected: Conversation,
     val settings: PocketPilotSettings,
+    val onboardingCompleted: Boolean,
+    val onboardingProjectSetupSucceeded: Boolean,
     val files: List<WorkspaceEntry>,
     val checkpoints: List<Checkpoint>,
     val timeline: List<TimelineItem>,

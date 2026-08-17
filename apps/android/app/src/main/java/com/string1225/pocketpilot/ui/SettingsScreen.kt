@@ -804,7 +804,7 @@ private fun <T> ChoiceDialog(
 }
 
 @Composable
-private fun ModelSettingsDialog(
+internal fun ModelSettingsDialog(
     settings: PocketPilotSettings,
     credentialConfigured: Boolean,
     testInProgress: Boolean,
@@ -1229,7 +1229,7 @@ private fun RemoteServersDialog(
 }
 
 @Composable
-private fun RemoteServerEditorDialog(
+internal fun RemoteServerEditorDialog(
     language: AppLanguage,
     initial: RemoteServerProfile,
     onDismiss: () -> Unit,

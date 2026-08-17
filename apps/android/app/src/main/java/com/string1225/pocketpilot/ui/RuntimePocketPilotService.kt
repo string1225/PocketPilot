@@ -3,6 +3,7 @@ package com.string1225.pocketpilot.ui
 import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
+import com.string1225.pocketpilot.data.GitProjectSetupRepository
 import com.string1225.pocketpilot.data.ProjectRepository
 import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
@@ -52,6 +53,7 @@ import org.json.JSONObject
  */
 class RuntimePocketPilotService(
     private val projects: ProjectRepository,
+    private val gitProjectSetup: GitProjectSetupRepository,
     private val workspace: WorkspaceRepository,
     private val checkpoints: CheckpointRepository,
     private val agentRuns: AgentRunRepository,
@@ -82,6 +84,15 @@ class RuntimePocketPilotService(
     override suspend fun listProjects(): List<Project> = projects.list()
 
     override suspend fun createProject(name: String): Project = projects.create(name)
+
+    override fun createProjectFromGit(
+        name: String,
+        remoteUrl: String,
+        branch: String?,
+        username: String,
+        useStoredCredential: Boolean,
+        newToken: CharArray?,
+    ): Project = gitProjectSetup.clone(name, remoteUrl, branch, username, useStoredCredential, newToken)
 
     override suspend fun deleteProject(projectId: String) {
         projects.delete(projectId)
@@ -135,6 +146,16 @@ class RuntimePocketPilotService(
     override fun saveSettings(settings: PocketPilotSettings) {
         persistNonLlmSettings(settings, this.settings)
     }
+
+    override fun isOnboardingCompleted(): Boolean = settings.isOnboardingCompleted()
+
+    override fun isOnboardingProjectConfigured(): Boolean = settings.isOnboardingProjectConfigured()
+
+    override fun markOnboardingProjectConfigured(projectId: String) {
+        settings.markOnboardingProjectConfigured(projectId, projects)
+    }
+
+    override fun completeOnboarding() = settings.completeOnboarding()
 
     override fun hasLlmCredential(): Boolean = credentials.contains(CredentialIds.DEFAULT_LLM)
 

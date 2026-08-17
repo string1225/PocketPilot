@@ -9,9 +9,55 @@ import com.string1225.pocketpilot.model.LlmSettingsPolicy
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.ThemePreference
 
+internal object OnboardingVersionPolicy {
+    const val CURRENT_VERSION = 1
+
+    fun initialVersion(existingProjects: Boolean): Int = if (existingProjects) CURRENT_VERSION else 0
+
+    fun isCompleted(rawVersion: String?): Boolean =
+        rawVersion?.toIntOrNull()?.let { it >= CURRENT_VERSION } == true
+}
+
 class SettingsRepository(
     private val database: PocketPilotDatabase,
 ) {
+    /**
+     * Initializes the first-run marker exactly once, before a service is allowed
+     * to create the default project. Existing installations already have at
+     * least one project and must not be sent through a newly-added onboarding
+     * flow after an APK update. Once written, the marker is never inferred from
+     * mutable project data again.
+     */
+    @Synchronized
+    fun initializeOnboardingState(existingProjects: Boolean) {
+        if (get(KEY_ONBOARDING_VERSION) != null) return
+        put(
+            database.writableDatabase,
+            KEY_ONBOARDING_VERSION,
+            OnboardingVersionPolicy.initialVersion(existingProjects).toString(),
+        )
+    }
+
+    fun isOnboardingCompleted(): Boolean = OnboardingVersionPolicy.isCompleted(get(KEY_ONBOARDING_VERSION))
+
+    fun isOnboardingProjectConfigured(): Boolean = getBoolean(KEY_ONBOARDING_PROJECT_CONFIGURED, false)
+
+    /** Persists the onboarding result only for a fully provisioned, checkpointed project. */
+    @Synchronized
+    fun markOnboardingProjectConfigured(projectId: String, projects: ProjectRepository) {
+        projects.requireProvisioned(projectId)
+        put(database.writableDatabase, KEY_ONBOARDING_PROJECT_CONFIGURED, "true")
+    }
+
+    @Synchronized
+    fun completeOnboarding() {
+        put(
+            database.writableDatabase,
+            KEY_ONBOARDING_VERSION,
+            CURRENT_ONBOARDING_VERSION.toString(),
+        )
+    }
+
     /**
      * Materializes the provider introduced after the original GLM-only alpha.
      * A legacy credential without persisted connection fields belongs to GLM;
@@ -230,8 +276,11 @@ class SettingsRepository(
     }
 
     companion object {
+        const val CURRENT_ONBOARDING_VERSION = OnboardingVersionPolicy.CURRENT_VERSION
         private const val MAX_MODEL_LENGTH = 128
         private const val MAX_ENDPOINT_LENGTH = 2_048
+        const val KEY_ONBOARDING_VERSION = "onboarding_version"
+        const val KEY_ONBOARDING_PROJECT_CONFIGURED = "onboarding_project_configured"
         const val KEY_MODEL_NAME = "model_name"
         const val KEY_LLM_PROVIDER = "llm_provider"
         const val KEY_LLM_PROTOCOL = "llm_protocol"

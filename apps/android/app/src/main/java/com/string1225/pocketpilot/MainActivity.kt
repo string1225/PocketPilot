@@ -28,13 +28,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
         val application = application as PocketPilotApplication
         speechInputController = SpeechInputControllerFactory.create(this)
         pocketPilotViewModel = ViewModelProvider(
@@ -48,7 +41,11 @@ class MainActivity : ComponentActivity() {
         )[PocketPilotViewModel::class.java]
         handleOpenConversationIntent(intent)
         setContent {
-            PocketPilotApp(pocketPilotViewModel, speechInputController)
+            PocketPilotApp(
+                viewModel = pocketPilotViewModel,
+                speechInputController = speechInputController,
+                onReadyForNotificationPermission = ::requestCompletionNotificationPermission,
+            )
         }
     }
 
@@ -73,6 +70,16 @@ class MainActivity : ComponentActivity() {
         val projectId = intent.getStringExtra(EXTRA_PROJECT_ID)?.takeIf { it.isNotBlank() } ?: return
         val conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID)?.takeIf { it.isNotBlank() } ?: return
         pocketPilotViewModel.openConversation(projectId, conversationId)
+    }
+
+    private fun requestCompletionNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     companion object {

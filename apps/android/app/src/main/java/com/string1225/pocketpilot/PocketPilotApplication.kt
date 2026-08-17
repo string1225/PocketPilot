@@ -12,6 +12,7 @@ import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.IntegrationToolDispatcher
 import com.string1225.pocketpilot.data.HttpToolDispatcher
+import com.string1225.pocketpilot.data.GitProjectSetupRepository
 import com.string1225.pocketpilot.data.ProjectRepository
 import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
@@ -63,6 +64,11 @@ class PocketPilotApplication : Application() {
         val projects = ProjectRepository(database, projectsRoot)
         val checkpoints = CheckpointRepository(database, projectsRoot, projects::exists)
         projects.checkpoints = checkpoints
+        // Fail closed: onboarding inference must never run while a marker-bearing row may remain.
+        val recoveredProjects = projects.recoverInterruptedProvisioning()
+        if (recoveredProjects > 0) {
+            Log.w(TAG, "Recovered $recoveredProjects interrupted project setup(s)")
+        }
         val workspace = WorkspaceRepository(
             projectsRoot = projectsRoot,
             projectExists = projects::exists,
@@ -75,9 +81,14 @@ class PocketPilotApplication : Application() {
         agentRuns.markInterruptedRuns()
         val conversations = ConversationRepository(database)
         val settings = SettingsRepository(database)
+        // This check must run before either service implementation creates its
+        // default project. It distinguishes an upgraded installation from a
+        // genuinely fresh install once, then the persisted marker is authoritative.
+        settings.initializeOnboardingState(existingProjects = projects.list().isNotEmpty())
         val activeRuns = ActiveRunRegistry()
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
+        val gitProjectSetup = GitProjectSetupRepository(projects, checkpoints, credentialStore)
         attachmentImageStore = FileAttachmentImageStore(this)
         updateManager = GitHubReleaseUpdateManager(this)
         settings.migrateLegacyLlmConnection(
@@ -126,6 +137,7 @@ class PocketPilotApplication : Application() {
             runtimeBridge = bridge
             RuntimePocketPilotService(
                 projects = projects,
+                gitProjectSetup = gitProjectSetup,
                 workspace = workspace,
                 checkpoints = checkpoints,
                 agentRuns = agentRuns,
@@ -147,6 +159,7 @@ class PocketPilotApplication : Application() {
             Log.e(TAG, "TypeScript runtime is unavailable; using the repository-only fallback", error)
             OfflinePocketPilotService(
                 projects = projects,
+                gitProjectSetup = gitProjectSetup,
                 workspace = workspace,
                 checkpoints = checkpoints,
                 agentRuns = agentRuns,

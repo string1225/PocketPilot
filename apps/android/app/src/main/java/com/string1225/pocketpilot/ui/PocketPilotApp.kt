@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -56,6 +55,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,12 +69,14 @@ import kotlinx.coroutines.launch
 private const val LIBRARY_PAGE = 0
 private const val CHAT_PAGE = 1
 private const val ARTIFACTS_PAGE = 2
+internal const val SETTINGS_LOGO_TEST_TAG = "pocketpilot-settings-logo"
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PocketPilotApp(
     viewModel: PocketPilotViewModel,
     speechInputController: SpeechInputController,
+    onReadyForNotificationPermission: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val language = state.settings.language
@@ -110,8 +112,22 @@ fun PocketPilotApp(
         speechInputController.stop()
     }
 
+    LaunchedEffect(state.onboardingCompleted) {
+        if (state.onboardingCompleted == true) onReadyForNotificationPermission()
+    }
+
     PocketPilotTheme(preference = state.settings.theme) {
-        if (showSettings) {
+        if (state.onboardingCompleted == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (state.onboardingCompleted == false) {
+            OnboardingScreen(
+                state = state,
+                viewModel = viewModel,
+                snackbarHostState = snackbarHostState,
+            )
+        } else if (showSettings) {
             BackHandler { showSettings = false }
             SettingsScreen(
                 settings = state.settings,
@@ -159,11 +175,13 @@ fun PocketPilotApp(
                 topBar = {
                     TopAppBar(
                         navigationIcon = {
-                            IconButton(onClick = { showSettings = true }) {
-                                Icon(
-                                    Icons.Default.SmartToy,
+                            IconButton(
+                                onClick = { showSettings = true },
+                                modifier = Modifier.testTag(SETTINGS_LOGO_TEST_TAG),
+                            ) {
+                                PocketPilotLogo(
+                                    modifier = Modifier.size(36.dp),
                                     contentDescription = ppText(language, "打开设置", "Open settings"),
-                                    tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         },
