@@ -1,5 +1,6 @@
 package com.string1225.pocketpilot.ui
 
+import android.view.KeyEvent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -10,8 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.test.espresso.Espresso.pressBack
 import androidx.compose.material3.SnackbarHostState
+import androidx.test.platform.app.InstrumentationRegistry
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.PocketPilotSettings
@@ -37,7 +38,10 @@ class ModelConnectionLoadingUiTest {
         composeRule.onNodeWithText("Default text model").assertIsNotEnabled()
         composeRule.onNodeWithText("Cancel").assertIsNotEnabled()
 
-        pressBack()
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.injectInputEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK), true)
+        automation.injectInputEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK), true)
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("Model connection").assertIsDisplayed()
 
         composeRule.runOnIdle {
