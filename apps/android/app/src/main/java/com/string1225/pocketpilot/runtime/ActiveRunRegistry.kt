@@ -17,6 +17,8 @@ class ActiveRunRegistry {
     fun authorizes(runId: String, projectId: String): Boolean =
         projectsByRun[runId] == projectId
 
+    fun projectId(runId: String): String? = projectsByRun[runId]
+
     fun revoke(runId: String, projectId: String): Boolean =
         projectsByRun.remove(runId, projectId)
 

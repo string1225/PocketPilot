@@ -59,15 +59,67 @@ export interface ProviderStreamEvent {
   readonly usage?: ProviderTokenUsage;
 }
 
+export type ProviderFinishReason =
+  | "stop"
+  | "tool_calls"
+  | "length"
+  | "content_filter"
+  | "unknown";
+
 export interface ProviderResponse {
   readonly content?: string;
   readonly toolCalls?: readonly ProviderToolCall[];
   readonly usage?: ProviderTokenUsage;
+  readonly finishReason?: ProviderFinishReason;
 }
 
 export interface AgentProvider {
   readonly name: string;
+  readonly contextWindowTokens?: number;
   complete(request: ProviderRequest): Promise<ProviderResponse>;
+}
+
+export interface AgentRunControl {
+  /** Messages that should redirect the current turn before its next model call. */
+  drainSteering(): readonly AgentMessage[];
+  /**
+   * Waits briefly for queued follow-ups after a nominal final response. The
+   * implementation must resolve undefined once the run can safely finish.
+   */
+  waitForFollowUp(signal: AbortSignal): Promise<readonly AgentMessage[] | undefined>;
+}
+
+export type AgentBoundaryPhase = "provider_ready" | "tool_in_flight";
+
+export interface AgentTurnHookContext {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly step: number;
+  readonly signal: AbortSignal;
+}
+
+export interface AgentTurnHooks {
+  beforeProvider?(
+    context: AgentTurnHookContext & { readonly messages: readonly AgentMessage[] },
+  ): void | Promise<void>;
+  afterProvider?(
+    context: AgentTurnHookContext & { readonly response: ProviderResponse },
+  ): void | Promise<void>;
+  beforeTool?(
+    context: AgentTurnHookContext & { readonly call: ProviderToolCall },
+  ): void | Promise<void>;
+  afterTool?(
+    context: AgentTurnHookContext & {
+      readonly call: ProviderToolCall;
+      readonly result: ToolResult<unknown>;
+    },
+  ): void | Promise<void>;
+  onBoundary?(
+    context: AgentTurnHookContext & {
+      readonly phase: AgentBoundaryPhase;
+      readonly messages: readonly AgentMessage[];
+    },
+  ): void | Promise<void>;
 }
 
 interface AgentEventBase {
@@ -78,6 +130,18 @@ interface AgentEventBase {
 }
 
 export type AgentEvent =
+  | (AgentEventBase & {
+      readonly type: "context.compacted";
+      readonly beforeTokens: number;
+      readonly afterTokens: number;
+      readonly omittedMessages: number;
+    })
+  | (AgentEventBase & {
+      readonly type: "run.boundary";
+      readonly phase: AgentBoundaryPhase;
+      readonly nextStep: number;
+      readonly messages?: readonly AgentMessage[];
+    })
   | (AgentEventBase & {
       readonly type: "run.started";
       readonly task: string;
@@ -132,6 +196,11 @@ export interface AgentRunInput {
   readonly task: string;
   readonly signal?: AbortSignal;
   readonly messages?: readonly AgentMessage[];
+  readonly resume?: {
+    readonly messages: readonly AgentMessage[];
+    readonly nextStep: number;
+  };
+  readonly control?: AgentRunControl;
 }
 
 interface AgentRunResultBase {

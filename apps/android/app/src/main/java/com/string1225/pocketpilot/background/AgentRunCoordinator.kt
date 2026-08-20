@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.string1225.pocketpilot.model.AgentRunStatus
+import com.string1225.pocketpilot.model.AgentRunResume
 import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
@@ -112,6 +113,23 @@ class AgentRunCoordinator(
         attachments: List<ChatImageAttachment> = emptyList(),
     ): String = startPending(createPendingTask(projectId, conversationId, task, attachments))
 
+    /** Resumes only provider-ready boundaries recovered by [AgentRunRepository]. */
+    fun resumeRecoverableRuns(): Int {
+        var resumed = 0
+        service.listRecoverableAgentRuns().forEach { recovery ->
+            synchronized(runLock) {
+                if (mutableRuns.value.values.any {
+                        it.projectId == recovery.projectId && !it.status.isTerminal
+                    }
+                ) return@forEach
+            }
+            runCatching { startRecovered(recovery) }
+                .onSuccess { resumed += 1 }
+                .onFailure { Log.e(TAG, "Unable to resume safe Agent boundary", it) }
+        }
+        return resumed
+    }
+
     fun enqueueOrStart(
         projectId: String,
         conversationId: String,
@@ -120,6 +138,30 @@ class AgentRunCoordinator(
     ): AgentTaskSubmission {
         val submitted = createPendingTask(projectId, conversationId, task, attachments)
         synchronized(runLock) {
+            val activeConversationRun = mutableRuns.value.values.firstOrNull {
+                it.projectId == projectId &&
+                    it.conversationId == conversationId &&
+                    !it.status.isTerminal &&
+                    it.runId !in finishingRunIds
+            }
+            if (
+                activeConversationRun != null &&
+                service.followUpAgent(
+                    activeConversationRun.runId,
+                    submitted.task,
+                    submitted.attachments,
+                )
+            ) {
+                val queuedItem = submitted.userItem.copy(status = "queued")
+                val updated = activeConversationRun.copy(
+                    timeline = upsertTimelineItem(activeConversationRun.timeline, queuedItem),
+                )
+                mutableRuns.value = mutableRuns.value + (updated.runId to updated)
+                transcriptChannels[updated.runId]?.trySend(
+                    TranscriptCommand.Append(updated, queuedItem),
+                )
+                return AgentTaskSubmission(submitted.id, queued = true)
+            }
             taskQueue.enqueue(submitted)
             if (mutableRuns.value.values.any { it.projectId == projectId && !it.status.isTerminal }) {
                 return AgentTaskSubmission(submitted.id, queued = true)
@@ -249,6 +291,73 @@ class AgentRunCoordinator(
         job.start()
         refreshRunningNotification()
         return runId
+    }
+
+    private fun startRecovered(recovery: AgentRunResume): String {
+        val run = CoordinatedAgentRun(
+            runId = recovery.runId,
+            projectId = recovery.projectId,
+            conversationId = recovery.conversationId,
+            task = recovery.task,
+            status = AgentRunStatus.RUNNING,
+            timeline = emptyList(),
+            startedAt = System.currentTimeMillis(),
+        )
+        synchronized(runLock) {
+            check(mutableRuns.value.values.none {
+                it.projectId == recovery.projectId && !it.status.isTerminal
+            }) { "This project already has an active run" }
+            mutableRuns.value = mutableRuns.value + (recovery.runId to run)
+        }
+        try {
+            ContextCompat.startForegroundService(
+                appContext,
+                AgentRunForegroundService.startIntent(
+                    context = appContext,
+                    runId = recovery.runId,
+                    projectId = recovery.projectId,
+                    conversationId = recovery.conversationId,
+                    task = recovery.task,
+                ),
+            )
+        } catch (error: Throwable) {
+            synchronized(runLock) { mutableRuns.value = mutableRuns.value - recovery.runId }
+            throw error
+        }
+        startTranscriptWriter(run)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val terminalStatus = try {
+                service.runAgent(
+                    recovery.projectId,
+                    recovery.conversationId,
+                    recovery.runId,
+                    recovery.task,
+                    emptyList(),
+                    resume = recovery,
+                ) { item -> appendTimeline(recovery.runId, item) }
+            } catch (cancelled: CancellationException) {
+                AgentRunStatus.CANCELLED
+            } catch (error: Throwable) {
+                appendTimeline(
+                    recovery.runId,
+                    TimelineItem(
+                        id = UUID.randomUUID().toString(),
+                        kind = TimelineItemKind.ERROR,
+                        title = "Recovery failed",
+                        body = error.message?.takeIf(String::isNotBlank) ?: "Unknown recovery error",
+                        createdAt = System.currentTimeMillis(),
+                        isError = true,
+                    ),
+                )
+                AgentRunStatus.FAILED
+            }
+            withContext(NonCancellable) { finish(recovery.runId, terminalStatus) }
+        }
+        jobs[recovery.runId] = job
+        job.invokeOnCompletion { jobs.remove(recovery.runId, job) }
+        job.start()
+        refreshRunningNotification()
+        return recovery.runId
     }
 
     fun cancel(runId: String) {

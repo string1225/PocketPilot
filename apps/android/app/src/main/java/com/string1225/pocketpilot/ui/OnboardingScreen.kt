@@ -291,6 +291,11 @@ internal fun OnboardingScreen(
         RemoteServerEditorDialog(
             language = language,
             initial = profile,
+            scanInProgress = state.sshHostKeyScanInProgress,
+            scanCandidate = state.sshHostKeyCandidate,
+            scanError = state.sshHostKeyScanError,
+            onScan = viewModel::scanSshHostKey,
+            onClearScan = viewModel::clearSshHostKeyScan,
             onDismiss = { editingServer = null },
             onSave = { updated, secret ->
                 editingServer = null
@@ -712,7 +717,7 @@ private fun ServerStep(
                     StatusCard(
                         completed = false,
                         title = ppText(language, "还没有服务器", "No server configured"),
-                        body = ppText(language, "准备好 Host、用户名、认证信息和可信的 SHA256 主机指纹。", "Have the host, username, credential, and a trusted SHA256 host fingerprint ready."),
+                        body = ppText(language, "准备好 Host、用户名和认证信息。PocketPilot 会先扫描主机公钥，再引导你通过服务器控制台或管理员核对。", "Have the host, username, and credential ready. PocketPilot scans the host key first, then asks you to verify it through the server console or an administrator."),
                     )
                 }
             } else {

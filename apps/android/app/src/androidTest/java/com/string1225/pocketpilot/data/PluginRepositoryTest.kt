@@ -177,7 +177,7 @@ class PluginRepositoryTest {
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
 
         assertEquals(listOf("plugins"), tables)
-        assertEquals(6, database.readableDatabase.version)
+        assertEquals(7, database.readableDatabase.version)
     }
 
     private fun bundle(

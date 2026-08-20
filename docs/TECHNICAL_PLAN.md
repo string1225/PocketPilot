@@ -86,7 +86,7 @@ Android 使用只加载 `android_asset` 的 WebView 运行 IIFE bundle。Bridge 
 
 `deepseek-harness-master`（DSH）仅作为结构化事件、Tool 配对、取消和权限分层的设计参考。PocketPilot 与 DSH 没有 npm/workspace、Git submodule 或运行时依赖关系；当前内核是独立实现的纯 TypeScript Web Runtime，其桌面 Node/Cordis/native host 依赖未移植到 Android。
 
-`pi-main` 也仅作为设计参考。对照评审显示，PocketPilot 下一步应优先补齐基于模型 token window 的 context compaction、Provider finish reason 与截断 Tool Call 防护，再考虑安全的并行 Tool 调度和同一 Run steering/follow-up。详细结论见 [Agent Kernel 与 pi 对照评审](PI_AGENT_KERNEL_REVIEW.md)。
+`pi-main` 也仅作为设计参考，不形成运行时依赖。PocketPilot 已独立实现基于模型 token window 的 context compaction、Provider finish reason 与截断 Tool Call 防护、只读并行/写入串行 Tool 调度、同一 Run steering/follow-up、组合式 turn hooks，以及仅在 `provider_ready` 安全边界上的进程恢复。详细结论见 [Agent Kernel 与 pi 对照评审](PI_AGENT_KERNEL_REVIEW.md)。
 
 ## 5. LLM Provider
 
@@ -143,7 +143,7 @@ Android 由 JGit 实现：init/clone/status/diff/commit/pull/push。Repository �
 
 ### SSH
 
-SSH 仅是 `ssh.execute`，不是远程 Workspace。配置包含 server id、host、port、username、认证方式、固定 `SHA256:` 主机公钥指纹、credential id 和说明。
+SSH 仅是 `ssh.execute`，不是远程 Workspace。配置包含 server id、host、port、username、认证方式、固定 `SHA256:` 主机公钥指纹、credential id 和说明。配置 UI 先用无凭据握手扫描公钥候选，只有用户声明已通过服务器控制台或管理员可信渠道核对后才允许保存；扫描值本身不被当作可信根。
 
 - 使用 SSHJ 严格 HostKeyVerifier；不接受 TOFU/Promiscuous verifier。
 - 密码/私钥只证明“客户端是谁”，主机公钥指纹证明“连接到的服务器是谁”；省略验证会让中间人有机会截获密码或代理命令。后续可增加连接前扫描公钥、展示算法与 SHA-256、由用户在可信渠道核对后一次确认的引导，但不能静默信任首次看到的 key。

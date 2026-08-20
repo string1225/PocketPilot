@@ -101,6 +101,7 @@ export const resolveOpenAICompatibleConfig = (
 
 export class OpenAICompatibleProvider implements AgentProvider {
   public readonly name: string;
+  public readonly contextWindowTokens: number;
   readonly #config: ResolvedOpenAICompatibleConfig;
   readonly #transport: NativeLlmTransport;
 
@@ -111,6 +112,12 @@ export class OpenAICompatibleProvider implements AgentProvider {
     this.#config = resolveOpenAICompatibleConfig(config);
     this.#transport = transport;
     this.name = `openai-compatible:${this.#config.protocol}:${this.#config.model}`;
+    const normalizedModel = this.#config.model.toLowerCase();
+    this.contextWindowTokens = normalizedModel.startsWith("gpt-5")
+      ? 400_000
+      : normalizedModel.startsWith("glm-5")
+        ? 128_000
+        : 128_000;
   }
 
   public complete(request: ProviderRequest): Promise<ProviderResponse> {

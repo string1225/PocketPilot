@@ -134,6 +134,7 @@ object LlmNativeRequestCodec {
                 )
             }
             response.usage?.let { usage -> put("usage", encodeUsage(usage)) }
+            put("finishReason", response.finishReason)
         }
         if (JSONObject.quote(encoded.toString()).length > MAX_BRIDGE_ENCODED_RESPONSE_CHARS) {
             throw LlmProtocolException(
@@ -404,25 +405,13 @@ object OpenAiCompatibleProtocolCodec {
             ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "Chat completion response has no choices")
         val choice = choices.optJSONObject(0)
             ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "Chat completion response has no first choice")
-        val finishReason = choice.optString("finish_reason")
-        when (finishReason) {
-            "length" -> throw LlmProtocolException("LLM_OUTPUT_TRUNCATED", "LLM output reached its token limit")
-            "content_filter", "sensitive" -> throw LlmProtocolException(
-                "LLM_CONTENT_FILTERED",
-                "LLM output was blocked by content filtering",
-            )
-            "network_error" -> throw LlmProtocolException(
-                "LLM_REMOTE_NETWORK_ERROR",
-                "LLM service reported a network error",
-                retryable = true,
-            )
-        }
+        val finishReason = normalizeFinishReason(choice.optString("finish_reason"))
         val message = choice.optJSONObject("message")
             ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "Chat completion choice has no message")
         val content = decodeChatContent(message.opt("content"))
             ?: message.optString("refusal").takeIf(String::isNotBlank)
         val calls = decodeChatToolCalls(message.optJSONArray("tool_calls"), aliases)
-        return requireUsableResponse(content, calls, decodeUsage(root.optJSONObject("usage")))
+        return requireUsableResponse(content, calls, decodeUsage(root.optJSONObject("usage")), finishReason)
     }
 
     private fun decodeResponsesResponse(
@@ -452,6 +441,7 @@ object OpenAiCompatibleProtocolCodec {
             textParts.takeIf { it.isNotEmpty() }?.joinToString(""),
             calls,
             decodeResponsesUsage(root.optJSONObject("usage")),
+            if (calls.isEmpty()) "stop" else "tool_calls",
         )
     }
 
@@ -531,6 +521,7 @@ object OpenAiCompatibleProtocolCodec {
         content: String?,
         calls: List<LlmToolCall>,
         usage: LlmTokenUsage? = null,
+        finishReason: String = "unknown",
     ): LlmProviderResponse {
         requireUniqueCallIds(calls)
         if (content == null && calls.isEmpty()) {
@@ -539,7 +530,12 @@ object OpenAiCompatibleProtocolCodec {
                 "LLM response contains neither text nor tool calls",
             )
         }
-        return LlmProviderResponse(content = content, toolCalls = calls, usage = usage)
+        return LlmProviderResponse(
+            content = content,
+            toolCalls = calls,
+            usage = usage,
+            finishReason = finishReason,
+        )
     }
 
     internal fun decodeUsage(usage: JSONObject?): LlmTokenUsage? {
@@ -605,6 +601,7 @@ internal class ChatCompletionsStreamDecoder(
     private var usage: LlmTokenUsage? = null
     private var sawChunk = false
     private var finished = false
+    private var finishReason = "unknown"
 
     fun accept(data: String): LlmStreamEvent? {
         check(!finished) { "LLM stream decoder is already finished" }
@@ -628,7 +625,9 @@ internal class ChatCompletionsStreamDecoder(
         }
         val choice = choices.optJSONObject(0)
             ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream choice must be an object")
-        validateFinishReason(choice.optString("finish_reason"))
+        choice.optString("finish_reason").takeIf(String::isNotBlank)?.let { rawReason ->
+            finishReason = normalizeFinishReason(rawReason)
+        }
         val delta = choice.optJSONObject("delta")
             ?: throw LlmProtocolException("LLM_INVALID_RESPONSE", "LLM stream choice has no delta")
         val contentDelta = decodeContentDelta(delta)
@@ -676,7 +675,12 @@ internal class ChatCompletionsStreamDecoder(
                 "LLM response contains neither text nor tool calls",
             )
         }
-        return LlmProviderResponse(decodedContent, decodedCalls, usage)
+        val normalizedReason = if (finishReason == "unknown" && decodedCalls.isNotEmpty()) {
+            "tool_calls"
+        } else {
+            finishReason
+        }
+        return LlmProviderResponse(decodedContent, decodedCalls, usage, normalizedReason)
     }
 
     private fun decodeContentDelta(delta: JSONObject): String? {
@@ -731,21 +735,6 @@ internal class ChatCompletionsStreamDecoder(
         }
     }
 
-    private fun validateFinishReason(reason: String) {
-        when (reason) {
-            "length" -> throw LlmProtocolException("LLM_OUTPUT_TRUNCATED", "LLM output reached its token limit")
-            "content_filter", "sensitive" -> throw LlmProtocolException(
-                "LLM_CONTENT_FILTERED",
-                "LLM output was blocked by content filtering",
-            )
-            "network_error" -> throw LlmProtocolException(
-                "LLM_REMOTE_NETWORK_ERROR",
-                "LLM service reported a network error",
-                retryable = true,
-            )
-        }
-    }
-
     private class StreamingToolCall {
         val id = StringBuilder()
         val name = StringBuilder()
@@ -770,6 +759,25 @@ internal class ChatCompletionsStreamDecoder(
     private companion object {
         const val MAX_TOOL_CALLS_PER_CHUNK = 128
     }
+}
+
+private fun normalizeFinishReason(reason: String): String = when (reason) {
+    "stop" -> "stop"
+    "tool_calls", "function_call" -> "tool_calls"
+    "length" -> throw LlmProtocolException(
+        "LLM_OUTPUT_TRUNCATED",
+        "LLM output reached its token limit; incomplete tool calls were blocked",
+    )
+    "content_filter", "sensitive" -> throw LlmProtocolException(
+        "LLM_CONTENT_FILTERED",
+        "LLM output was blocked by content filtering",
+    )
+    "network_error" -> throw LlmProtocolException(
+        "LLM_REMOTE_NETWORK_ERROR",
+        "LLM service reported a network error",
+        retryable = true,
+    )
+    else -> "unknown"
 }
 
 internal class ToolNameAliases(tools: List<LlmToolDefinition>) {

@@ -82,6 +82,29 @@ class PocketPilotRuntimeBridge(
         evaluateJavascript(RuntimeJavascriptCalls.cancel(JSONObject.quote(runId)))
     }
 
+    /** Queues a message for the next model turn without creating another Run. */
+    fun followUp(runId: String, content: String): Boolean = sendControl(runId, content, steering = false)
+
+    /** Redirects the active Run before its next provider/tool boundary. */
+    fun steer(runId: String, content: String): Boolean = sendControl(runId, content, steering = true)
+
+    private fun sendControl(runId: String, content: String, steering: Boolean): Boolean {
+        require(runId.isNotBlank()) { "Run id must not be blank" }
+        val normalized = content.trim()
+        require(normalized.isNotEmpty()) { "Control message must not be empty" }
+        if (!toolJobs.canStart(runId)) return false
+        val quotedRunId = JSONObject.quote(runId)
+        val quotedContent = JSONObject.quote(normalized)
+        evaluateJavascript(
+            if (steering) {
+                RuntimeJavascriptCalls.steer(quotedRunId, quotedContent)
+            } else {
+                RuntimeJavascriptCalls.followUp(quotedRunId, quotedContent)
+            },
+        )
+        return true
+    }
+
     /**
      * Ends one Agent-run lifecycle. A cancellation tombstone deliberately
      * survives this call so late JavaScript messages cannot resurrect a
@@ -321,4 +344,10 @@ internal object RuntimeJavascriptCalls {
 
     fun cancel(quotedRunId: String): String =
         "window.PocketPilotRuntime.cancel($quotedRunId);"
+
+    fun steer(quotedRunId: String, quotedContent: String): String =
+        "window.PocketPilotRuntime.steer($quotedRunId,$quotedContent);"
+
+    fun followUp(quotedRunId: String, quotedContent: String): String =
+        "window.PocketPilotRuntime.followUp($quotedRunId,$quotedContent);"
 }

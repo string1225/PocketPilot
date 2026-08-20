@@ -11,6 +11,9 @@ import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
 import com.string1225.pocketpilot.model.AgentRunStatus
+import com.string1225.pocketpilot.model.AgentRunResume
+import com.string1225.pocketpilot.model.SshHostKeyCandidate
+import com.string1225.pocketpilot.integrations.ssh.SshHostKeyScanner
 import com.string1225.pocketpilot.model.Checkpoint
 import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.Conversation
@@ -109,6 +112,7 @@ interface PocketPilotService {
     fun saveGitCredential(secret: CharArray)
     fun removeGitCredential()
     fun listRemoteServers(): List<RemoteServerProfile>
+    fun scanSshHostKey(host: String, port: Int): SshHostKeyCandidate
     fun saveRemoteServer(profile: RemoteServerProfile, secret: CharArray?): RemoteServerProfile
     fun deleteRemoteServer(serverId: String)
     fun listPlugins(): List<InstalledPlugin>
@@ -132,10 +136,18 @@ interface PocketPilotService {
         runId: String,
         task: String,
         attachments: List<ChatImageAttachment>,
+        resume: AgentRunResume? = null,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus
 
+    fun listRecoverableAgentRuns(): List<AgentRunResume>
+
     suspend fun cancelAgent(runId: String)
+    fun followUpAgent(
+        runId: String,
+        task: String,
+        attachments: List<ChatImageAttachment> = emptyList(),
+    ): Boolean
     fun resolveApproval(requestId: String, approved: Boolean): Boolean
 }
 
@@ -157,6 +169,7 @@ class OfflinePocketPilotService(
     private val plugins: PluginRepository,
     private val pluginRuns: PluginRunCoordinationGate,
     private val llmConnectionVerifier: LlmConnectionVerifier? = null,
+    private val sshHostKeyScanner: SshHostKeyScanner = SshHostKeyScanner(),
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean = true
     override val runtimeAvailable: Boolean = false
@@ -295,6 +308,9 @@ class OfflinePocketPilotService(
 
     override fun listRemoteServers(): List<RemoteServerProfile> = sshServers.list()
 
+    override fun scanSshHostKey(host: String, port: Int): SshHostKeyCandidate =
+        sshHostKeyScanner.scan(host, port)
+
     override fun saveRemoteServer(
         profile: RemoteServerProfile,
         secret: CharArray?,
@@ -343,12 +359,17 @@ class OfflinePocketPilotService(
         runId: String,
         task: String,
         attachments: List<ChatImageAttachment>,
+        resume: AgentRunResume?,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus {
         pluginRuns.beginRun(runId)
         return try {
             activeRuns += runId
-            agentRuns.create(projectId, task, requestedId = runId)
+            if (resume == null) {
+                agentRuns.create(projectId, conversationId, task, requestedId = runId)
+            } else {
+                agentRuns.resume(runId)
+            }
             agentRuns.appendEvent(runId, "user.message", task)
             emit(
                 timeline(
@@ -410,6 +431,14 @@ class OfflinePocketPilotService(
             agentRuns.finish(runId, AgentRunStatus.CANCELLED)
         }
     }
+
+    override fun followUpAgent(
+        runId: String,
+        task: String,
+        attachments: List<ChatImageAttachment>,
+    ): Boolean = false
+
+    override fun listRecoverableAgentRuns(): List<AgentRunResume> = emptyList()
 
     override fun resolveApproval(requestId: String, approved: Boolean): Boolean = false
 

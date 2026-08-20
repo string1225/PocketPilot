@@ -496,6 +496,13 @@ const nativeTool = (
   name,
   description,
   risk,
+  executionMode: name === "workspace.list" ||
+    name === "workspace.read" ||
+    name === "workspace.search" ||
+    name === "git.status" ||
+    name === "git.diff"
+    ? "parallel"
+    : "sequential",
   inputSchema,
   execute: (input, context) => rpc.execute(name, input, context)
 });

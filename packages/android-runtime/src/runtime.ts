@@ -2,6 +2,8 @@ import {
   DefaultAgentRunner,
   type AgentEvent,
   type AgentProvider,
+  type AgentMessage,
+  type AgentRunControl,
   type AgentRunResult
 } from "@pocketpilot/agent-core";
 import {
@@ -30,6 +32,62 @@ export interface AndroidAgentRuntimeOptions {
 interface ActiveRun {
   readonly controller: AbortController;
   readonly promise: Promise<AgentRunResult>;
+  readonly mailbox: RunMailbox;
+}
+
+class RunMailbox implements AgentRunControl {
+  readonly #steering: AgentMessage[] = [];
+  readonly #followUps: AgentMessage[] = [];
+  readonly #waiters = new Set<(messages: readonly AgentMessage[] | undefined) => void>();
+  #closed = false;
+
+  public pushSteering(content: string): boolean {
+    if (this.#closed || content.trim().length === 0) return false;
+    this.#steering.push({ role: "user", content: content.trim() });
+    return true;
+  }
+
+  public pushFollowUp(content: string): boolean {
+    if (this.#closed || content.trim().length === 0) return false;
+    this.#followUps.push({ role: "user", content: content.trim() });
+    if (this.#waiters.size > 0) {
+      const messages = this.#followUps.splice(0);
+      for (const waiter of this.#waiters) waiter(messages);
+      this.#waiters.clear();
+    }
+    return true;
+  }
+
+  public drainSteering(): readonly AgentMessage[] {
+    return this.#steering.splice(0);
+  }
+
+  public waitForFollowUp(signal: AbortSignal): Promise<readonly AgentMessage[] | undefined> {
+    const available = this.#followUps.splice(0);
+    if (available.length > 0) return Promise.resolve(available);
+    if (this.#closed || signal.aborted) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (messages: readonly AgentMessage[] | undefined) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", aborted);
+        this.#waiters.delete(finish);
+        resolve(messages);
+      };
+      const aborted = () => finish(undefined);
+      const timer = setTimeout(() => finish(undefined), 250);
+      this.#waiters.add(finish);
+      signal.addEventListener("abort", aborted, { once: true });
+    });
+  }
+
+  public close(): void {
+    this.#closed = true;
+    for (const waiter of this.#waiters) waiter(undefined);
+    this.#waiters.clear();
+  }
 }
 
 const fallbackFailure = (
@@ -83,6 +141,7 @@ export class AndroidAgentRuntime {
     }
 
     const controller = new AbortController();
+    const mailbox = new RunMailbox();
     // Android Native owns the user-visible, per-call approval UI. Allow the
     // bridge request through here so network/remote calls can reach that gate.
     const enabledTools = request.toolsEnabled === false
@@ -112,7 +171,9 @@ export class AndroidAgentRuntime {
         projectId: request.projectId,
         task: request.task,
         ...(request.messages === undefined ? {} : { messages: request.messages }),
-        signal: controller.signal
+        ...(request.resume === undefined ? {} : { resume: request.resume }),
+        signal: controller.signal,
+        control: mailbox
       })
       .catch((error: unknown) => {
         const result = fallbackFailure(request, error);
@@ -131,11 +192,12 @@ export class AndroidAgentRuntime {
         this.#postEvent(failureEvent);
         return result;
       });
-    this.#runs.set(request.runId, { controller, promise });
+    this.#runs.set(request.runId, { controller, promise, mailbox });
     try {
       const result = await promise;
       return JSON.stringify(result);
     } finally {
+      mailbox.close();
       this.#runs.delete(request.runId);
     }
   }
@@ -151,6 +213,14 @@ export class AndroidAgentRuntime {
     }
     active.controller.abort();
     return true;
+  }
+
+  public steer(runId: string, content: string): boolean {
+    return this.#runs.get(runId)?.mailbox.pushSteering(content) ?? false;
+  }
+
+  public followUp(runId: string, content: string): boolean {
+    return this.#runs.get(runId)?.mailbox.pushFollowUp(content) ?? false;
   }
 
   public get activeRunCount(): number {

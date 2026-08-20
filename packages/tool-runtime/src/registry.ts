@@ -81,8 +81,20 @@ export class ToolRegistry {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
-      risk: tool.risk
+      risk: tool.risk,
+      executionMode: tool.executionMode ?? "sequential"
     }));
+  }
+
+  public definition(name: string): ToolDefinition | undefined {
+    const tool = this.#tools.get(name);
+    return tool === undefined ? undefined : {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      risk: tool.risk,
+      executionMode: tool.executionMode ?? "sequential"
+    };
   }
 
   public async execute(

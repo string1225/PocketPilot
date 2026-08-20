@@ -61,11 +61,14 @@ class PocketPilotDatabase(
             CREATE TABLE agent_runs (
                 id TEXT PRIMARY KEY NOT NULL,
                 project_id TEXT NOT NULL,
+                conversation_id TEXT,
                 task TEXT NOT NULL,
                 status TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
                 completed_at INTEGER,
                 error TEXT,
+                recovery_phase TEXT,
+                resume_payload TEXT,
                 FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
             """.trimIndent(),
@@ -178,6 +181,11 @@ class PocketPilotDatabase(
                 db.execSQL("ALTER TABLE git_config ADD COLUMN username TEXT NOT NULL DEFAULT 'git'")
             }
         }
+        if (oldVersion < 7 && db.hasTable("agent_runs")) {
+            db.execSQL("ALTER TABLE agent_runs ADD COLUMN conversation_id TEXT")
+            db.execSQL("ALTER TABLE agent_runs ADD COLUMN recovery_phase TEXT")
+            db.execSQL("ALTER TABLE agent_runs ADD COLUMN resume_payload TEXT")
+        }
         check(newVersion <= DATABASE_VERSION) {
             "Database version $newVersion is newer than supported version $DATABASE_VERSION"
         }
@@ -263,8 +271,13 @@ class PocketPilotDatabase(
                 .any { it == column }
         }
 
+    private fun SQLiteDatabase.hasTable(table: String): Boolean = rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        arrayOf(table),
+    ).use { it.moveToFirst() }
+
     companion object {
         private const val DATABASE_NAME = "pocketpilot.db"
-        private const val DATABASE_VERSION = 6
+        private const val DATABASE_VERSION = 7
     }
 }

@@ -21,7 +21,7 @@ Compose Chat
 - 模型协议默认选择 OpenAI Chat API：用户必须填写 OpenAI-compatible HTTPS Endpoint、文本模型、图片模型和 API Key（AK）。也可选择 GLM；此时隐藏 Endpoint，文本模型默认 `glm-5.3`，图片识别固定使用 `glm-5v-turbo`，AK 仍必填。保存连接前会分别验证文本和图片模型。
 - API Key、项目级 Git Personal access token（PAT）、SSH 密码/私钥使用 Android Keystore 保护的 AES-GCM 加密存储，不写进 Workspace、SQLite 明文字段、日志或 Git。
 - Agent Run 由 Application 级 Coordinator 管理；离开 Activity 后由前台服务继续，结束、失败或取消后发通知，点击通知回到对应项目和会话。
-- Agent Loop 不设置固定轮次或 App 级运行时长上限；模型返回 final、用户终止、审批拒绝、Provider/Tool 错误或 Android 系统终止时才结束。
+- Agent Loop 不设置固定轮次或 App 级运行时长上限；它按模型 context window 自动压缩旧上下文，拒绝执行被 token 截断的 Tool Call，只读工具可并行而写/远程工具保持顺序屏障。运行中对同一会话补充的消息会进入同一 Run；进程重启只从无工具副作用在途的安全模型边界恢复。
 - Chat Completions 使用 SSE 原位更新同一条 Assistant 消息；消息底部显示状态与 Token usage，运行中的新消息按 Project 进入 FIFO 队列。
 - 支持中英文系统语音识别和多图片上传；图片先复制到 App 私有目录，再由受控 `image.analyze` 工具调用配置的视觉模型。
 - Workspace 八个工具、树形文件浏览、自动 Checkpoint、Diff 与 Restore。
@@ -29,7 +29,7 @@ Compose Chat
 - HTTP：对公网 HTTP(S) 发起有超时和正文上限的请求；禁用重定向，拒绝 IP literal、内网/回环/链路本地/元数据地址及敏感请求头，二进制响应以 Base64 无损返回。
 - 沙箱脚本：`execute_js` 与 `execute_ts` 在一次性 Web Worker 中运行，隔离 Native Bridge、网络、文件和凭据，并限制执行时间及输入输出。
 - 本地插件：导入带清单和源码 SHA-256 的 JSON bundle，预览后安装、默认停用、二次确认启用；首版只允许沙箱内纯计算的 `read` 工具。
-- SSHJ：固定主机公钥指纹验证、密码或未加密 PEM/OpenSSH 私钥认证、命令超时和输出上限。
+- SSHJ：保存前先做不携带凭据的主机公钥扫描，用户通过控制台/管理员可信渠道核对后固定 SHA256 指纹；后续指纹变化直接阻断。支持密码或未加密 PEM/OpenSSH 私钥认证、命令超时和输出上限。
 - 没有配置 LLM Key 时自动使用离线命令 Provider，可在模拟器或真机上验证完整 Agent/Tool 链路。
 
 危险或远端操作在 Native 层逐次审批。模型或 WebView Runtime 不能直接读取明文凭据；Native 只在核对当前 Run、Project、Endpoint/Remote 和批准结果后释放对应凭据。
@@ -88,7 +88,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 1. 阅读欢迎页中的本地 Workspace、Agent Kernel、模型 Endpoint 与远程 Tool 架构说明，点击底部“下一步”。
 2. 在模型步骤使用默认的 OpenAI Chat API，填写 HTTPS Endpoint、文本模型、图片模型和 API Key；或选择 GLM，确认文本模型（默认 `glm-5.3`）并录入 API Key，图片识别固定使用 `glm-5v-turbo`。保存时 App 会显示测试进度，文本与图片模型都通过后“下一步”才会启用。
 3. 选择是否现在配置项目。选择“是”后可创建本地 Workspace，或填写项目名、HTTPS Git URL、可选分支、用户名和低权限 Token 进行真实克隆；公开仓库可不填 Token。URL 不接受 HTTP、userinfo、query 或 fragment，Token 只进入 Android Keystore。
-4. 选择是否现在配置 SSH 服务器。选择“是”后填写服务器公钥的可信 `SHA256:` 指纹，并录入密码或通过系统文件选择器导入 OpenSSH/PEM 私钥；也可以选择“暂时不要”稍后配置。
+4. 选择是否现在配置 SSH 服务器。选择“是”后先点“扫描主机公钥”；扫描只做握手、不发送用户名或凭据。把显示的算法与 `SHA256:` 指纹通过服务器控制台或管理员可信渠道核对并确认，再录入密码或导入 OpenSSH/PEM 私钥；也可以选择“暂时不要”稍后配置。
 5. 在完成页检查模型、当前项目和服务器摘要，点击“开始使用”进入聊天。此时 Android 才会按系统版本请求通知权限；允许后，切出 App 的任务可在完成时通知你。
 
 引导完成状态单独持久化在本地设置中；APK 覆盖更新不会重跑引导或清空配置。升级自旧版本且已有项目的安装会直接保留原有入口。之后可点左上角 PocketPilot Logo 配置模型或 SSH 服务器；每个项目的 Git 仓库和 PAT 在“项目与会话”页单独管理。

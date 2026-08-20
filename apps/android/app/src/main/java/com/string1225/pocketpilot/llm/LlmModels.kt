@@ -88,6 +88,7 @@ data class LlmProviderResponse(
     val content: String? = null,
     val toolCalls: List<LlmToolCall> = emptyList(),
     val usage: LlmTokenUsage? = null,
+    val finishReason: String = "unknown",
 )
 
 class LlmProtocolException(

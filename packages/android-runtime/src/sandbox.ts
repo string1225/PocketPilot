@@ -1011,6 +1011,7 @@ const scriptTool = (
     `Run a pure ${language === "javascript" ? "JavaScript" : "TypeScript"} async function body in an isolated Worker. ` +
     "Only JSON input, bounded console output, and a JSON return value are available; network, DOM, native bridge, imports, and child workers are disabled.",
   risk: "read",
+  executionMode: "parallel",
   inputSchema: scriptToolSchema,
   execute: async (input, context) => {
     const parsed = parseToolInput(input, language);

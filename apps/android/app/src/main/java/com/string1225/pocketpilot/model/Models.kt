@@ -59,10 +59,27 @@ enum class AgentRunStatus(val value: String) {
     IDLE("idle"),
     RUNNING("running"),
     WAITING_FOR_APPROVAL("waiting_for_approval"),
+    RECOVERABLE("recoverable"),
     COMPLETED("completed"),
     FAILED("failed"),
     CANCELLED("cancelled");
 }
+
+data class AgentRunResume(
+    val runId: String,
+    val projectId: String,
+    val conversationId: String,
+    val task: String,
+    /** Trusted JSON produced by the bundled runtime at a provider-ready boundary. */
+    val payloadJson: String,
+)
+
+data class SshHostKeyCandidate(
+    val host: String,
+    val port: Int,
+    val algorithm: String,
+    val fingerprint: String,
+)
 
 enum class TimelineItemKind {
     USER,

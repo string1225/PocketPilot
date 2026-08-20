@@ -63,6 +63,10 @@ export interface RuntimeStartRequest {
   readonly messages?: readonly AgentMessage[];
   readonly toolsEnabled?: boolean;
   readonly plugins?: readonly RuntimePluginPackage[];
+  readonly resume?: {
+    readonly messages: readonly AgentMessage[];
+    readonly nextStep: number;
+  };
 }
 
 export interface RuntimePluginTool {
@@ -94,6 +98,8 @@ export interface PocketPilotRuntimeGlobal {
   start(requestJson: string): Promise<string>;
   receive(envelopeJson: string): void;
   cancel(runId: string): boolean;
+  steer(runId: string, content: string): boolean;
+  followUp(runId: string, content: string): boolean;
 }
 
 export interface PocketPilotGlobalScope {
@@ -177,6 +183,74 @@ const parseHistory = (value: unknown): readonly AgentMessage[] | undefined => {
     }
     return { role: record.role, content: record.content };
   });
+};
+
+const parseResume = (
+  value: unknown,
+): RuntimeStartRequest["resume"] => {
+  if (value === undefined) return undefined;
+  const record = asRecord(value);
+  if (
+    record === undefined ||
+    record.phase !== "provider_ready" ||
+    typeof record.nextStep !== "number" ||
+    !Number.isSafeInteger(record.nextStep) ||
+    record.nextStep < 1 ||
+    !Array.isArray(record.messages) ||
+    record.messages.length < 1 ||
+    record.messages.length > 1_024
+  ) {
+    throw new Error("resume must contain a provider-ready message boundary.");
+  }
+  const messages = record.messages.map((value, index): AgentMessage => {
+    const message = asRecord(value);
+    if (message === undefined || typeof message.content !== "string") {
+      throw new Error(`resume.messages[${index}] is invalid.`);
+    }
+    if (message.role === "system" || message.role === "user") {
+      return { role: message.role, content: message.content };
+    }
+    if (message.role === "assistant") {
+      const rawCalls = message.toolCalls;
+      if (rawCalls !== undefined && !Array.isArray(rawCalls)) {
+        throw new Error(`resume.messages[${index}].toolCalls is invalid.`);
+      }
+      const toolCalls = rawCalls?.map((rawCall) => {
+        const call = asRecord(rawCall);
+        if (
+          call === undefined ||
+          typeof call.id !== "string" ||
+          typeof call.name !== "string" ||
+          !("arguments" in call)
+        ) throw new Error(`resume.messages[${index}] has an invalid tool call.`);
+        return { id: call.id, name: call.name, arguments: call.arguments };
+      });
+      return {
+        role: "assistant",
+        content: message.content,
+        ...(toolCalls === undefined ? {} : { toolCalls })
+      };
+    }
+    if (
+      message.role === "tool" &&
+      typeof message.toolCallId === "string" &&
+      typeof message.name === "string"
+    ) {
+      const result = asRecord(message.result);
+      if (result === undefined || typeof result.success !== "boolean") {
+        throw new Error(`resume.messages[${index}].result is invalid.`);
+      }
+      return {
+        role: "tool",
+        content: message.content,
+        toolCallId: message.toolCallId,
+        name: message.name,
+        result: message.result as ToolResult<unknown>
+      };
+    }
+    throw new Error(`resume.messages[${index}] has an unsupported role.`);
+  });
+  return { messages, nextStep: record.nextStep };
 };
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
@@ -437,7 +511,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     systemPrompt,
     messages,
     toolsEnabled,
-    plugins
+    plugins,
+    resume
   } = record;
   if (
     typeof runId !== "string" ||
@@ -461,6 +536,7 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
   }
   const parsedMessages = parseHistory(messages);
   const parsedPlugins = parsePlugins(plugins);
+  const parsedResume = parseResume(resume);
   return {
     runId,
     projectId,
@@ -469,7 +545,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     ...(parsedMessages === undefined ? {} : { messages: parsedMessages }),
     ...(toolsEnabled === undefined ? {} : { toolsEnabled }),
-    ...(parsedPlugins === undefined ? {} : { plugins: parsedPlugins })
+    ...(parsedPlugins === undefined ? {} : { plugins: parsedPlugins }),
+    ...(parsedResume === undefined ? {} : { resume: parsedResume })
   };
 };
 

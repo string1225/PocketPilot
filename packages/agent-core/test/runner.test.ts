@@ -47,13 +47,16 @@ describe("DefaultAgentRunner", () => {
     expect(result).toMatchObject({ status: "completed", output: "Done", steps: 2 });
     expect(result.events.map(({ type }) => type)).toEqual([
       "run.started",
+      "run.boundary",
       "assistant.message",
+      "run.boundary",
       "tool.started",
       "tool.finished",
+      "run.boundary",
       "assistant.message",
       "run.completed"
     ]);
-    expect(result.events.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(result.events.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("feeds ordinary tool failure back to the provider instead of crashing", async () => {
@@ -113,27 +116,28 @@ describe("DefaultAgentRunner", () => {
 
     expect(result.events.map(({ type }) => type)).toEqual([
       "run.started",
+      "run.boundary",
       "assistant.delta",
       "assistant.delta",
       "assistant.message",
       "run.completed"
     ]);
-    expect(result.events[1]).toMatchObject({
+    expect(result.events[2]).toMatchObject({
       messageId: "run-1:assistant:1",
       delta: "你",
       content: "你"
     });
-    expect(result.events[2]).toMatchObject({
+    expect(result.events[3]).toMatchObject({
       messageId: "run-1:assistant:1",
       delta: "好",
       content: "你好"
     });
-    expect(result.events[3]).toMatchObject({
+    expect(result.events[4]).toMatchObject({
       messageId: "run-1:assistant:1",
       content: "你好",
       usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 }
     });
-    expect(result.events[4]).toMatchObject({
+    expect(result.events[5]).toMatchObject({
       usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 }
     });
   });
@@ -209,7 +213,7 @@ describe("DefaultAgentRunner", () => {
     const run = new DefaultAgentRunner({ provider, tools: new ToolRegistry() }).run(
       input(controller.signal),
     );
-    expect(started).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
     controller.abort();
     await expect(run).resolves.toMatchObject({ status: "cancelled", steps: 1 });
   });
@@ -312,5 +316,117 @@ describe("DefaultAgentRunner", () => {
       status: "failed",
       error: { code: "DUPLICATE_TOOL_CALL_ID" }
     });
+  });
+
+  it("compacts oversized context against the provider token window", async () => {
+    const provider: AgentProvider = {
+      name: "small-window",
+      contextWindowTokens: 2_048,
+      complete: async (request) => {
+        expect(request.messages.some((message) =>
+          message.role === "system" && message.content.includes("compacted locally"),
+        )).toBe(true);
+        return { content: "Done", finishReason: "stop" };
+      }
+    };
+    const history = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history-${index}-${"x".repeat(600)}`
+    }));
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry(),
+      reserveOutputTokens: 512,
+      summaryTokens: 256
+    }).run({ ...input(), messages: history });
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compacted", omittedMessages: expect.any(Number) })
+    ]));
+  });
+
+  it("never executes tool calls when the provider reports truncated output", async () => {
+    const execute = vi.fn(async () => toolSuccess({ ok: true }));
+    const result = await new DefaultAgentRunner({
+      provider: new ScriptedProvider([{
+        finishReason: "length",
+        toolCalls: [{ id: "partial", name: "test.echo", arguments: {} }]
+      }]),
+      tools: new ToolRegistry().register({ ...echoTool, execute })
+    }).run(input());
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "MODEL_OUTPUT_TRUNCATED" }
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("runs independent read tools concurrently while preserving result order", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const parallelTool = {
+      ...echoTool,
+      executionMode: "parallel" as const,
+      execute: async (value: unknown) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active -= 1;
+        return toolSuccess(value);
+      }
+    };
+    const provider = new ScriptedProvider([
+      {
+        finishReason: "tool_calls",
+        toolCalls: [
+          { id: "read-1", name: "test.echo", arguments: 1 },
+          { id: "read-2", name: "test.echo", arguments: 2 }
+        ]
+      },
+      (request) => {
+        const results = request.messages.filter((message) => message.role === "tool");
+        expect(results.map((message) => message.toolCallId)).toEqual(["read-1", "read-2"]);
+        return { content: "Done", finishReason: "stop" };
+      }
+    ]);
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry().register(parallelTool)
+    }).run(input());
+    expect(result.status).toBe("completed");
+    expect(maximumActive).toBe(2);
+  });
+
+  it("continues the same run for queued follow-ups and invokes composable hooks", async () => {
+    const calls: string[] = [];
+    let delivered = false;
+    const result = await new DefaultAgentRunner({
+      provider: new ScriptedProvider([
+        { content: "First", finishReason: "stop" },
+        (request) => {
+          expect(request.messages[request.messages.length - 1]).toMatchObject({
+            role: "user",
+            content: "Continue"
+          });
+          return { content: "Second", finishReason: "stop" };
+        }
+      ]),
+      tools: new ToolRegistry(),
+      hooks: [{
+        beforeProvider: ({ step }) => { calls.push(`before:${step}`); },
+        afterProvider: ({ step }) => { calls.push(`after:${step}`); }
+      }]
+    }).run({
+      ...input(),
+      control: {
+        drainSteering: () => [],
+        waitForFollowUp: async () => {
+          if (delivered) return undefined;
+          delivered = true;
+          return [{ role: "user", content: "Continue" }];
+        }
+      }
+    });
+    expect(result).toMatchObject({ status: "completed", output: "Second", steps: 2 });
+    expect(calls).toEqual(["before:1", "after:1", "before:2", "after:2"]);
   });
 });

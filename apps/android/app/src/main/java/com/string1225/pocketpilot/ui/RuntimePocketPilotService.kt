@@ -11,6 +11,9 @@ import com.string1225.pocketpilot.data.SettingsRepository
 import com.string1225.pocketpilot.data.SshServerRepository
 import com.string1225.pocketpilot.data.WorkspaceRepository
 import com.string1225.pocketpilot.model.AgentRunStatus
+import com.string1225.pocketpilot.model.AgentRunResume
+import com.string1225.pocketpilot.model.SshHostKeyCandidate
+import com.string1225.pocketpilot.integrations.ssh.SshHostKeyScanner
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.Checkpoint
 import com.string1225.pocketpilot.model.ChatImageAttachment
@@ -69,6 +72,7 @@ class RuntimePocketPilotService(
     private val plugins: PluginRepository,
     private val pluginRuns: PluginRunCoordinationGate,
     private val llmConnectionVerifier: LlmConnectionVerifier? = null,
+    private val sshHostKeyScanner: SshHostKeyScanner = SshHostKeyScanner(),
 ) : PocketPilotService {
     override val isOfflineDemo: Boolean
         get() = !hasLlmCredential() || runCatching {
@@ -205,6 +209,9 @@ class RuntimePocketPilotService(
 
     override fun listRemoteServers(): List<RemoteServerProfile> = sshServers.list()
 
+    override fun scanSshHostKey(host: String, port: Int): SshHostKeyCandidate =
+        sshHostKeyScanner.scan(host, port)
+
     override fun saveRemoteServer(
         profile: RemoteServerProfile,
         secret: CharArray?,
@@ -253,6 +260,7 @@ class RuntimePocketPilotService(
         runId: String,
         task: String,
         attachments: List<ChatImageAttachment>,
+        resume: AgentRunResume?,
         emit: (TimelineItem) -> Unit,
     ): AgentRunStatus {
         val completion = CompletableDeferred<AgentRunStatus>()
@@ -263,9 +271,20 @@ class RuntimePocketPilotService(
         pluginRuns.beginRun(runId)
 
         return try {
-            agentRuns.create(projectId, task, requestedId = runId)
+            if (resume == null) {
+                agentRuns.create(projectId, conversationId, task, requestedId = runId)
+            } else {
+                require(resume.runId == runId && resume.projectId == projectId) {
+                    "Recovery record does not match the requested run"
+                }
+                agentRuns.resume(runId)
+            }
             runCreated = true
-            agentRuns.appendEvent(runId, "user.message", JSONObject().put("content", task).toString())
+            if (resume == null) {
+                agentRuns.appendEvent(runId, "user.message", JSONObject().put("content", task).toString())
+            } else {
+                agentRuns.appendEvent(runId, "run.resumed", JSONObject().put("safeBoundary", true).toString())
+            }
             activeRuns.register(runId, projectId)
             registered = true
             subscription = events.subscribe(
@@ -320,6 +339,9 @@ class RuntimePocketPilotService(
                         buildSystemPrompt(projectId, runSettings.personalization, runSettings.language),
                     )
                     .put("messages", history)
+                    .apply {
+                        resume?.let { put("resume", JSONObject(it.payloadJson)) }
+                    }
                     .put("toolsEnabled", runSettings.toolsEnabled)
                     .put(
                         "plugins",
@@ -361,6 +383,17 @@ class RuntimePocketPilotService(
             agentRuns.finish(runId, AgentRunStatus.CANCELLED)
         }
     }
+
+    override fun followUpAgent(
+        runId: String,
+        task: String,
+        attachments: List<ChatImageAttachment>,
+    ): Boolean {
+        if (activeRuns.projectId(runId) == null) return false
+        return runtime.followUp(runId, task.withAttachmentContext(attachments))
+    }
+
+    override fun listRecoverableAgentRuns(): List<AgentRunResume> = agentRuns.listRecoverable()
 
     override fun resolveApproval(requestId: String, approved: Boolean): Boolean =
         approvals.resolve(requestId, approved)
@@ -449,6 +482,16 @@ class RuntimePocketPilotService(
         completion: CompletableDeferred<AgentRunStatus>,
     ) {
         if (event.runId != runId || event.projectId != projectId) return
+        if (event.type == "run.boundary") {
+            val boundary = runCatching { JSONObject(event.payloadJson) }.getOrNull()
+                ?: throw IllegalArgumentException("Runtime recovery boundary is invalid")
+            val phase = boundary.optString("phase")
+            agentRuns.saveBoundary(
+                runId = runId,
+                phase = phase,
+                payloadJson = event.payloadJson.takeIf { phase == "provider_ready" },
+            )
+        }
         // Deltas are transient UI state. Persist only the final assistant event
         // so a long streamed answer cannot create one database row per chunk.
         if (event.type != "assistant.delta") {

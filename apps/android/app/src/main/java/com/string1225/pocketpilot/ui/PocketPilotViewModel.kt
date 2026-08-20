@@ -21,6 +21,7 @@ import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.Project
 import com.string1225.pocketpilot.model.ProjectGitBinding
 import com.string1225.pocketpilot.model.RemoteServerProfile
+import com.string1225.pocketpilot.model.SshHostKeyCandidate
 import com.string1225.pocketpilot.model.ThemePreference
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
@@ -92,6 +93,9 @@ data class PocketPilotUiState(
     val projectGitBinding: ProjectGitBinding? = null,
     val projectGitBindingInProgress: Boolean = false,
     val remoteServers: List<RemoteServerProfile> = emptyList(),
+    val sshHostKeyScanInProgress: Boolean = false,
+    val sshHostKeyCandidate: SshHostKeyCandidate? = null,
+    val sshHostKeyScanError: String? = null,
     val plugins: List<InstalledPlugin> = emptyList(),
     val appUpdate: UpdateState,
     val confirmDeepLinkDiscard: Boolean = false,
@@ -135,6 +139,7 @@ class PocketPilotViewModel(
     private var draftGeneration = 0L
     private var llmConnectionTestJob: Job? = null
     private var onboardingProjectSetupJob: Job? = null
+    private var sshHostKeyScanJob: Job? = null
     private var appUpdateOperationJob: Job? = null
     private var lastObservedUpdatePhase = updateManager.state.value.phase
     private var notifiedAvailableVersion: String? = null
@@ -223,6 +228,17 @@ class PocketPilotViewModel(
                 )
             }
             initialized = true
+            val resumedRuns = withContext(Dispatchers.IO) {
+                coordinator.resumeRecoverableRuns()
+            }
+            if (resumedRuns > 0) {
+                postNotice(
+                    localized(
+                        "已从安全边界恢复 $resumedRuns 个任务",
+                        "Resumed $resumedRuns task(s) from a safe model boundary",
+                    ),
+                )
+            }
             syncCoordinatorState(
                 coordinator.runs.value,
                 coordinator.pendingApprovals.value,
@@ -1252,6 +1268,50 @@ class PocketPilotViewModel(
                 mutableState.update { it.copy(remoteServers = servers) }
                 postNotice(localized("远程服务器已保存", "Remote server saved"))
             }
+        }
+    }
+
+    fun scanSshHostKey(host: String, port: Int) {
+        if (sshHostKeyScanJob?.isActive == true) return
+        mutableState.update {
+            it.copy(
+                sshHostKeyScanInProgress = true,
+                sshHostKeyCandidate = null,
+                sshHostKeyScanError = null,
+            )
+        }
+        sshHostKeyScanJob = viewModelScope.launch {
+            try {
+                val candidate = runInterruptible(Dispatchers.IO) {
+                    service.scanSshHostKey(host, port)
+                }
+                mutableState.update {
+                    it.copy(
+                        sshHostKeyScanInProgress = false,
+                        sshHostKeyCandidate = candidate,
+                    )
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update {
+                    it.copy(
+                        sshHostKeyScanInProgress = false,
+                        sshHostKeyScanError = error.message ?: "SSH host-key scan failed",
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearSshHostKeyScan() {
+        sshHostKeyScanJob?.cancel()
+        sshHostKeyScanJob = null
+        mutableState.update {
+            it.copy(
+                sshHostKeyScanInProgress = false,
+                sshHostKeyCandidate = null,
+                sshHostKeyScanError = null,
+            )
         }
     }
 

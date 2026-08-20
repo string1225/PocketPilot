@@ -46,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +72,7 @@ import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.SshAuthType
+import com.string1225.pocketpilot.model.SshHostKeyCandidate
 import com.string1225.pocketpilot.model.ThemePreference
 import com.string1225.pocketpilot.update.UpdatePhase
 import com.string1225.pocketpilot.update.UpdateState
@@ -92,6 +94,9 @@ fun SettingsScreen(
     llmConnectionTestError: String?,
     gitCredentialConfigured: Boolean,
     remoteServers: List<RemoteServerProfile>,
+    sshHostKeyScanInProgress: Boolean = false,
+    sshHostKeyCandidate: SshHostKeyCandidate? = null,
+    sshHostKeyScanError: String? = null,
     plugins: List<InstalledPlugin>,
     appUpdate: UpdateState,
     onSettingsChange: (PocketPilotSettings) -> Unit,
@@ -101,6 +106,8 @@ fun SettingsScreen(
     onSaveGitCredential: (String) -> Unit,
     onRemoveGitCredential: () -> Unit,
     onSaveRemoteServer: (RemoteServerProfile, String?) -> Unit,
+    onScanSshHostKey: (String, Int) -> Unit = { _, _ -> },
+    onClearSshHostKeyScan: () -> Unit = {},
     onDeleteRemoteServer: (String) -> Unit,
     onPreviewPluginBundle: (String) -> Result<PluginInstallPreview>,
     onInstallPluginBundle: (String) -> Unit,
@@ -316,6 +323,11 @@ fun SettingsScreen(
             onDismiss = { showRemoteServers = false },
             onSave = onSaveRemoteServer,
             onDelete = onDeleteRemoteServer,
+            scanInProgress = sshHostKeyScanInProgress,
+            scanCandidate = sshHostKeyCandidate,
+            scanError = sshHostKeyScanError,
+            onScan = onScanSshHostKey,
+            onClearScan = onClearSshHostKeyScan,
         )
     }
 
@@ -1137,6 +1149,11 @@ private fun RemoteServersDialog(
     onDismiss: () -> Unit,
     onSave: (RemoteServerProfile, String?) -> Unit,
     onDelete: (String) -> Unit,
+    scanInProgress: Boolean,
+    scanCandidate: SshHostKeyCandidate?,
+    scanError: String?,
+    onScan: (String, Int) -> Unit,
+    onClearScan: () -> Unit,
 ) {
     var editing by remember { mutableStateOf<RemoteServerProfile?>(null) }
     AlertDialog(
@@ -1194,6 +1211,11 @@ private fun RemoteServersDialog(
                 editing = null
                 onSave(updated, secret)
             },
+            scanInProgress = scanInProgress,
+            scanCandidate = scanCandidate,
+            scanError = scanError,
+            onScan = onScan,
+            onClearScan = onClearScan,
         )
     }
 }
@@ -1204,6 +1226,11 @@ internal fun RemoteServerEditorDialog(
     initial: RemoteServerProfile,
     onDismiss: () -> Unit,
     onSave: (RemoteServerProfile, String?) -> Unit,
+    scanInProgress: Boolean = false,
+    scanCandidate: SshHostKeyCandidate? = null,
+    scanError: String? = null,
+    onScan: (String, Int) -> Unit = { _, _ -> },
+    onClearScan: () -> Unit = {},
 ) {
     var name by rememberSaveable(initial.id) { mutableStateOf(initial.name) }
     var host by rememberSaveable(initial.id) { mutableStateOf(initial.host) }
@@ -1211,18 +1238,33 @@ internal fun RemoteServerEditorDialog(
     var username by rememberSaveable(initial.id) { mutableStateOf(initial.username) }
     var authType by rememberSaveable(initial.id) { mutableStateOf(initial.authType) }
     var fingerprint by rememberSaveable(initial.id) { mutableStateOf(initial.hostKeyFingerprint) }
+    var hostKeyConfirmed by rememberSaveable(initial.id) {
+        mutableStateOf(initial.hostKeyFingerprint.startsWith("SHA256:"))
+    }
     var description by rememberSaveable(initial.id) { mutableStateOf(initial.description) }
     var secret by remember(initial.id) { mutableStateOf("") }
     var credentialImportError by remember(initial.id) { mutableStateOf<String?>(null) }
     val clearAndDismiss = {
         secret = ""
+        onClearScan()
         onDismiss()
     }
     val parsedPort = port.toIntOrNull()
     val needsNewCredential = !initial.hasCredential || authType != initial.authType
     val valid = name.isNotBlank() && host.isNotBlank() && username.isNotBlank() &&
         parsedPort != null && parsedPort in 1..65535 && fingerprint.startsWith("SHA256:") &&
+        hostKeyConfirmed &&
         (!needsNewCredential || secret.isNotBlank())
+
+    val matchingCandidate = scanCandidate?.takeIf {
+        it.host == host.trim() && it.port == parsedPort
+    }
+    LaunchedEffect(matchingCandidate) {
+        matchingCandidate?.let {
+            fingerprint = it.fingerprint
+            hostKeyConfirmed = false
+        }
+    }
 
     AlertDialog(
         onDismissRequest = clearAndDismiss,
@@ -1240,7 +1282,12 @@ internal fun RemoteServerEditorDialog(
                 item {
                     OutlinedTextField(
                         value = host,
-                        onValueChange = { host = it.take(253) },
+                        onValueChange = {
+                            host = it.take(253)
+                            fingerprint = ""
+                            hostKeyConfirmed = false
+                            onClearScan()
+                        },
                         label = { Text("Host") },
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -1249,7 +1296,12 @@ internal fun RemoteServerEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = port,
-                            onValueChange = { port = it.filter(Char::isDigit).take(5) },
+                            onValueChange = {
+                                port = it.filter(Char::isDigit).take(5)
+                                fingerprint = ""
+                                hostKeyConfirmed = false
+                                onClearScan()
+                            },
                             label = { Text("Port") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(0.35f),
@@ -1280,12 +1332,40 @@ internal fun RemoteServerEditorDialog(
                     }
                 }
                 item {
+                    Button(
+                        onClick = {
+                            fingerprint = ""
+                            hostKeyConfirmed = false
+                            onScan(host.trim(), checkNotNull(parsedPort))
+                        },
+                        enabled = !scanInProgress && host.isNotBlank() &&
+                            parsedPort != null && parsedPort in 1..65535,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (scanInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                        }
+                        Text(
+                            if (scanInProgress) {
+                                ppText(language, "正在扫描主机公钥…", "Scanning host key…")
+                            } else {
+                                ppText(language, "扫描主机公钥", "Scan host key")
+                            },
+                        )
+                    }
+                }
+                item {
                     OutlinedTextField(
                         value = fingerprint,
-                        onValueChange = { fingerprint = it.trim().take(80) },
+                        onValueChange = {},
                         label = { Text("Host key SHA256 fingerprint") },
                         supportingText = { Text("SHA256:…") },
                         singleLine = true,
+                        readOnly = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1295,6 +1375,61 @@ internal fun RemoteServerEditorDialog(
                             language,
                             "请从服务器管理员或服务器控制台核对主机指纹。可在服务器执行：ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub。不要仅信任首次连接弹出的指纹。",
                             "Verify the host fingerprint with the server administrator or console. On the server, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Do not trust a fingerprint shown only by the first connection attempt.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                matchingCandidate?.let { candidate ->
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                ppText(
+                                    language,
+                                    "服务器返回 ${candidate.algorithm}",
+                                    "Server presented ${candidate.algorithm}",
+                                ),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            if (
+                                initial.hostKeyFingerprint.isNotBlank() &&
+                                initial.hostKeyFingerprint != candidate.fingerprint
+                            ) {
+                                Text(
+                                    ppText(
+                                        language,
+                                        "警告：主机公钥与之前保存的指纹不同。确认服务器确实更换过密钥，否则不要继续。",
+                                        "Warning: this key differs from the saved pin. Confirm an intentional key change before continuing.",
+                                    ),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = hostKeyConfirmed,
+                                    onCheckedChange = { hostKeyConfirmed = it },
+                                )
+                                Text(
+                                    ppText(
+                                        language,
+                                        "我已通过服务器控制台或管理员可信渠道核对该指纹",
+                                        "I verified this fingerprint through the server console or another trusted administrator channel",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
+                scanError?.let { error ->
+                    item { Text(error, color = MaterialTheme.colorScheme.error) }
+                }
+                item {
+                    Text(
+                        ppText(
+                            language,
+                            "扫描只进行 SSH 握手，不会发送用户名、密码或私钥。首次结果仍可能被中间人替换，必须先从服务器控制台或管理员核对；保存后指纹变化会直接阻断连接。",
+                            "Scanning performs only the SSH handshake and sends no username, password, or private key. Verify the first result through the server console or an administrator; later key changes are blocked.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1391,6 +1526,7 @@ internal fun RemoteServerEditorDialog(
                 onClick = {
                     val submittedSecret = secret.takeIf { it.isNotBlank() }
                     secret = ""
+                    onClearScan()
                     onSave(
                         initial.copy(
                             name = name.trim(),

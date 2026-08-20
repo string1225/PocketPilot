@@ -30,7 +30,9 @@ describe("Android runtime bridge", () => {
     expect(api).toEqual({
       start: expect.any(Function),
       receive: expect.any(Function),
-      cancel: expect.any(Function)
+      cancel: expect.any(Function),
+      steer: expect.any(Function),
+      followUp: expect.any(Function)
     });
     expect(parse(postMessage.mock.calls[0]?.[0] as string)).toEqual({
       version: 1,
@@ -166,9 +168,12 @@ describe("Android runtime bridge", () => {
       .map((envelope) => (envelope.payload as { readonly type: string }).type);
     expect(eventTypes).toEqual([
       "run.started",
+      "run.boundary",
       "assistant.message",
+      "run.boundary",
       "tool.started",
       "tool.finished",
+      "run.boundary",
       "assistant.message",
       "run.completed"
     ]);
@@ -229,6 +234,34 @@ describe("Android runtime bridge", () => {
     expect(envelopes.filter(({ type }) => type === "tool.request")).toHaveLength(12);
     expect(runtime.pendingToolCount).toBe(0);
     expect(runtime.activeRunCount).toBe(0);
+  });
+
+  it("queues a follow-up into the same active run", async () => {
+    let calls = 0;
+    const runtime = new AndroidAgentRuntime({
+      providerFactory: () => ({
+        name: "follow-up-provider",
+        complete: async (request) => {
+          calls += 1;
+          if (calls === 1) return { content: "First", finishReason: "stop" };
+          expect(request.messages[request.messages.length - 1]).toMatchObject({
+            role: "user",
+            content: "Continue in this run"
+          });
+          return { content: "Second", finishReason: "stop" };
+        }
+      }),
+      postMessage: () => {}
+    });
+    const resultPromise = runtime.start(JSON.stringify({
+      runId: "same-run",
+      projectId: "project-1",
+      task: "Start"
+    }));
+    expect(runtime.followUp("same-run", "Continue in this run")).toBe(true);
+    const result = JSON.parse(await resultPromise) as Record<string, unknown>;
+    expect(result).toMatchObject({ status: "completed", steps: 2, output: "Second" });
+    expect(calls).toBe(2);
   });
 
   it("cancels a pending native tool and emits run.cancelled", async () => {

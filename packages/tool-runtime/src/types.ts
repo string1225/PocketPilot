@@ -18,6 +18,7 @@ export interface JsonSchema {
 }
 
 export type ToolRisk = "read" | "write" | "network" | "remote";
+export type ToolExecutionMode = "parallel" | "sequential";
 
 export interface ToolError {
   readonly code: string;
@@ -50,6 +51,12 @@ export interface AgentTool<TInput = unknown, TOutput = unknown> {
   readonly description: string;
   readonly inputSchema: JsonSchema;
   readonly risk: ToolRisk;
+  /**
+   * Parallel tools must be side-effect-free with respect to the project and
+   * independent of every sibling call. Mutating, network-write and remote
+   * tools must keep the default sequential barrier.
+   */
+  readonly executionMode?: ToolExecutionMode;
   execute(input: TInput, context: ToolContext): Promise<ToolResult<TOutput>>;
 }
 
@@ -58,6 +65,7 @@ export interface ToolDefinition {
   readonly description: string;
   readonly inputSchema: JsonSchema;
   readonly risk: ToolRisk;
+  readonly executionMode?: ToolExecutionMode;
 }
 
 export const toolSuccess = <T>(

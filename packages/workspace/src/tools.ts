@@ -106,6 +106,7 @@ export const createWorkspaceTools = (
     name: "workspace.list",
     description: "List files and directories immediately inside a workspace directory.",
     risk: "read",
+    executionMode: "parallel",
     inputSchema: objectSchema({ path: { type: "string" } }),
     execute: (input) =>
       executeSafely(async () => {
@@ -117,6 +118,7 @@ export const createWorkspaceTools = (
     name: "workspace.read",
     description: "Read one UTF-8 text file from the project workspace.",
     risk: "read",
+    executionMode: "parallel",
     inputSchema: objectSchema({ path: { type: "string" } }, ["path"]),
     execute: (input) =>
       executeSafely(async () => {
@@ -199,6 +201,7 @@ export const createWorkspaceTools = (
     name: "workspace.search",
     description: "Search UTF-8 workspace files for exact text.",
     risk: "read",
+    executionMode: "parallel",
     inputSchema: objectSchema(
       {
         query: { type: "string" },

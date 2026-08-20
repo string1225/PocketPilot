@@ -101,7 +101,9 @@ export const installPocketPilotRuntime = (
     receive: (envelopeJson) => {
       runtime.receive(envelopeJson);
     },
-    cancel: (runId) => runtime.cancel(runId)
+    cancel: (runId) => runtime.cancel(runId),
+    steer: (runId, content) => runtime.steer(runId, content),
+    followUp: (runId, content) => runtime.followUp(runId, content)
   };
   target.PocketPilotRuntime = api;
   try {

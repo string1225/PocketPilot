@@ -140,6 +140,7 @@ export const createPluginTools = (
     description:
       `${tool.description} This installed plugin is pure computation only and has no native, network, file, model, or credential access.`,
     risk: "read",
+    executionMode: "parallel",
     inputSchema: tool.inputSchema,
     execute: async (input, context): Promise<ToolResult<JsonValue>> => {
       const validationFailure = validateInput(

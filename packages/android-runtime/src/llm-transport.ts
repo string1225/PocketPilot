@@ -181,6 +181,20 @@ const parseProviderResponse = (value: unknown): ProviderResponse => {
   }
   const toolCalls = rawToolCalls?.map(parseToolCall);
   const usage = parseUsage(record.usage);
+  const finishReason = record.finishReason;
+  if (
+    finishReason !== undefined &&
+    finishReason !== "stop" &&
+    finishReason !== "tool_calls" &&
+    finishReason !== "length" &&
+    finishReason !== "content_filter" &&
+    finishReason !== "unknown"
+  ) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM response finishReason is unsupported.",
+    );
+  }
   if (content === undefined && toolCalls === undefined) {
     throw new NativeLlmTransportError(
       "LLM_INVALID_RESPONSE",
@@ -190,7 +204,8 @@ const parseProviderResponse = (value: unknown): ProviderResponse => {
   return {
     ...(content === undefined ? {} : { content }),
     ...(toolCalls === undefined ? {} : { toolCalls }),
-    ...(usage === undefined ? {} : { usage })
+    ...(usage === undefined ? {} : { usage }),
+    ...(finishReason === undefined ? {} : { finishReason })
   };
 };
 

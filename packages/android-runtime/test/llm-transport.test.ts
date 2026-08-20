@@ -393,19 +393,20 @@ describe("runtime LLM provider selection", () => {
 
     expect(runtimeEvents.map((event) => event.type)).toEqual([
       "run.started",
+      "run.boundary",
       "assistant.delta",
       "assistant.delta",
       "assistant.message",
       "run.completed"
     ]);
-    expect(runtimeEvents.slice(1, 4).map((event) => event.messageId)).toEqual([
+    expect(runtimeEvents.slice(2, 5).map((event) => event.messageId)).toEqual([
       "run-stream-order:assistant:1",
       "run-stream-order:assistant:1",
       "run-stream-order:assistant:1"
     ]);
-    expect(runtimeEvents[1]).toMatchObject({ delta: "Pocket", content: "Pocket" });
-    expect(runtimeEvents[2]).toMatchObject({ delta: "Pilot", content: "PocketPilot" });
-    expect(runtimeEvents[3]).toMatchObject({
+    expect(runtimeEvents[2]).toMatchObject({ delta: "Pocket", content: "Pocket" });
+    expect(runtimeEvents[3]).toMatchObject({ delta: "Pilot", content: "PocketPilot" });
+    expect(runtimeEvents[4]).toMatchObject({
       content: "PocketPilot",
       status: "completed",
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }

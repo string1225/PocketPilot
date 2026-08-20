@@ -79,7 +79,7 @@ class PocketPilotApplication : Application() {
         val agentRuns = AgentRunRepository(database, projects::exists)
         // This is process recovery, not screen initialization. A ViewModel can
         // be recreated while an Application-scoped foreground Run is alive.
-        agentRuns.markInterruptedRuns()
+        agentRuns.recoverInterruptedRuns()
         val conversations = ConversationRepository(database)
         val settings = SettingsRepository(database)
         // This check must run before either service implementation creates its
