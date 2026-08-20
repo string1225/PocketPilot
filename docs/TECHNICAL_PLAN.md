@@ -80,11 +80,11 @@ plugins (manifest metadata + content hash; source stays in private files)
 2. 请求 Provider。
 3. 把结构化 Tool Calls 交给 Tool Registry。
 4. Tool Result 无论成功或失败都回填上下文。
-5. 循环直到 final、取消、拒绝、超时或最大 step。
+5. 不设固定 step 或 App 级时长上限，循环直到 final、用户取消、审批拒绝、Provider/Tool 错误或 Android 系统终止。
 
 Android 使用只加载 `android_asset` 的 WebView 运行 IIFE bundle。Bridge 使用版本化 envelope，所有请求携带 `id/runId/projectId`；Native 校验活动 Run 和 Project 绑定，响应也必须匹配同一上下文。WebView 禁止外部导航、文件/内容访问和弹窗，网络 LLM 请求由 Native 完成，不受 CORS 影响。
 
-`deepseek-harness-master` 仅作为结构化事件、Tool 配对、取消和权限分层的设计参考；其桌面 Node/Cordis 依赖未直接移植。
+`deepseek-harness-master`（DSH）仅作为结构化事件、Tool 配对、取消和权限分层的设计参考。PocketPilot 与 DSH 没有 npm/workspace、Git submodule 或运行时依赖关系；当前内核是独立实现的纯 TypeScript Web Runtime，其桌面 Node/Cordis/native host 依赖未移植到 Android。
 
 ## 5. LLM Provider
 

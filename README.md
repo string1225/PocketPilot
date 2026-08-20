@@ -2,7 +2,7 @@
 
 PocketPilot 是一个去中心化 Android Agent Workspace：手机保存项目、会话、Workspace、Checkpoint 和凭据引用，TypeScript Agent 通过受控 Tool 操作本地项目，并可把命令交给用户自己的 SSH 服务器。
 
-当前 `0.3.1` 已打通：
+当前 `0.3.2` 已打通：
 
 ```text
 Compose Chat
@@ -21,6 +21,7 @@ Compose Chat
 - 模型协议默认选择 OpenAI Chat API：用户必须填写 OpenAI-compatible HTTPS Endpoint、文本模型、图片模型和 API Key（AK）。也可选择 GLM；此时隐藏 Endpoint，文本模型默认 `glm-5.3`，图片识别固定使用 `glm-5v-turbo`，AK 仍必填。保存连接前会分别验证文本和图片模型。
 - API Key、Git Token、SSH 密码/私钥使用 Android Keystore 保护的 AES-GCM 加密存储，不写进 Workspace、SQLite 明文字段、日志或 Git。
 - Agent Run 由 Application 级 Coordinator 管理；离开 Activity 后由前台服务继续，结束、失败或取消后发通知，点击通知回到对应项目和会话。
+- Agent Loop 不设置固定轮次或 App 级运行时长上限；模型返回 final、用户终止、审批拒绝、Provider/Tool 错误或 Android 系统终止时才结束。
 - Chat Completions 使用 SSE 原位更新同一条 Assistant 消息；消息底部显示状态与 Token usage，运行中的新消息按 Project 进入 FIFO 队列。
 - 支持中英文系统语音识别和多图片上传；图片先复制到 App 私有目录，再由受控 `image.analyze` 工具调用配置的视觉模型。
 - Workspace 八个工具、自动 Checkpoint、Diff 与 Restore。
@@ -48,7 +49,7 @@ packages/android-runtime/     Android WebView IIFE Runtime
 docs/                         技术方案与设备测试指南
 ```
 
-`deepseek-harness-master` 用作 Agent 运行机制的设计参考。PocketPilot 复用了结构化事件、Tool Call/Result 配对、取消、权限分层和最大步数等模式，没有把桌面 Node/Cordis 依赖直接带入 Android。
+`deepseek-harness-master`（DSH）只用作 Agent 运行机制的设计参考。PocketPilot 借鉴了结构化事件、Tool Call/Result 配对、取消和权限分层等模式，但没有依赖、嵌入或运行 DSH，也没有把它的桌面 Node/Cordis 依赖带入 Android。PocketPilot 当前使用自己实现的纯 TypeScript Agent Kernel，并通过 Android WebView IIFE Runtime 与 Kotlin Native Tool 层通信。
 
 ## 本地验证
 

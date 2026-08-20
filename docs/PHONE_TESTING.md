@@ -173,6 +173,7 @@ adb devices -l
 5. GLM 文本模型应默认为 `glm-5.3`、图片模型固定为 `glm-5v-turbo`；API Key（AK）仍为空且必填。使用专用 GLM 测试 AK 点击“保存”，等待连接测试完成，再验证 SSE 打字机效果、图片识别、Tool calling 与多轮历史。
 6. 切回 OpenAI Chat API，确认 Endpoint 输入框重新显示且必填。设置 UI 不应再显示 Responses 协议选项；Responses 仅保留为后端兼容能力。
 7. 移除 Key 后再次发送 `/list`，应自动回到离线 Provider。
+8. 用测试 Provider 或可控模型触发至少 12 次连续 Tool Call，确认第 9 次以后仍继续运行并最终完成；PocketPilot 不应再返回 `MAX_STEPS_EXCEEDED`，也不应在 30 分钟处由 App 主动终止 Run。
 
 不要使用生产主 Key。建议创建可撤销、限额的测试 Key。不要截图 Key 输入框，不要把 Key 放进项目文件或 logcat。
 

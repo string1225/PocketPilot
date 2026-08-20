@@ -179,6 +179,58 @@ describe("Android runtime bridge", () => {
     expect(runtime.activeRunCount).toBe(0);
   });
 
+  it("ignores the legacy maxSteps field and completes after more than eight tool steps", async () => {
+    const envelopes: Record<string, unknown>[] = [];
+    let runtime: AndroidAgentRuntime;
+    runtime = new AndroidAgentRuntime({
+      providerFactory: () => ({
+        name: "long-running-provider",
+        complete: async (request) =>
+          request.step <= 12
+            ? {
+                toolCalls: [{
+                  id: `runtime-call-${request.step}`,
+                  name: "workspace.list",
+                  arguments: { path: "" }
+                }]
+              }
+            : { content: "Runtime completed without a step cap" }
+      }),
+      postMessage: (json) => {
+        const envelope = parse(json);
+        envelopes.push(envelope);
+        if (envelope.type === "tool.request") {
+          queueMicrotask(() => {
+            runtime.receive(JSON.stringify({
+              version: ANDROID_BRIDGE_VERSION,
+              id: envelope.id,
+              type: "tool.result",
+              runId: envelope.runId,
+              projectId: envelope.projectId,
+              payload: toolSuccess([])
+            }));
+          });
+        }
+      }
+    });
+
+    const result = JSON.parse(await runtime.start(JSON.stringify({
+      runId: "run-unlimited",
+      projectId: "project-1",
+      task: "Complete a long tool sequence",
+      maxSteps: 1
+    }))) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      status: "completed",
+      steps: 13,
+      output: "Runtime completed without a step cap"
+    });
+    expect(envelopes.filter(({ type }) => type === "tool.request")).toHaveLength(12);
+    expect(runtime.pendingToolCount).toBe(0);
+    expect(runtime.activeRunCount).toBe(0);
+  });
+
   it("cancels a pending native tool and emits run.cancelled", async () => {
     let toolSeenResolve: (() => void) | undefined;
     const toolSeen = new Promise<void>((resolve) => {

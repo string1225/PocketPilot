@@ -253,29 +253,32 @@ describe("DefaultAgentRunner", () => {
     }
   });
 
-  it("fails deterministically at the maximum step count", async () => {
+  it("continues beyond eight tool steps until the provider returns a final answer", async () => {
     const provider: AgentProvider = {
-      name: "loop",
-      complete: async (request) => ({
-        toolCalls: [
-          {
-            id: `call-${request.step}`,
-            name: "test.echo",
-            arguments: request.step
-          }
-        ]
-      })
+      name: "long-running-loop",
+      complete: async (request) =>
+        request.step <= 12
+          ? {
+              toolCalls: [
+                {
+                  id: `call-${request.step}`,
+                  name: "test.echo",
+                  arguments: { step: request.step }
+                }
+              ]
+            }
+          : { content: "Finished after twelve tool steps" }
     };
     const result = await new DefaultAgentRunner({
       provider,
-      tools: new ToolRegistry().register(echoTool),
-      maxSteps: 2
+      tools: new ToolRegistry().register(echoTool)
     }).run(input());
     expect(result).toMatchObject({
-      status: "failed",
-      steps: 2,
-      error: { code: "MAX_STEPS_EXCEEDED" }
+      status: "completed",
+      steps: 13,
+      output: "Finished after twelve tool steps"
     });
+    expect(result.events.filter(({ type }) => type === "tool.finished")).toHaveLength(12);
   });
 
   it("returns unknown tool results to the model", async () => {

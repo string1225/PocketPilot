@@ -58,7 +58,6 @@ export interface RuntimeStartRequest {
   readonly runId: string;
   readonly projectId: string;
   readonly task: string;
-  readonly maxSteps?: number;
   readonly provider?: RuntimeProviderConfig;
   readonly systemPrompt?: string;
   readonly messages?: readonly AgentMessage[];
@@ -434,7 +433,6 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     runId,
     projectId,
     task,
-    maxSteps,
     provider,
     systemPrompt,
     messages,
@@ -450,15 +448,6 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     task.trim().length === 0
   ) {
     throw new Error("runId, projectId, and task must be non-empty strings.");
-  }
-  if (
-    maxSteps !== undefined &&
-    (typeof maxSteps !== "number" ||
-      !Number.isSafeInteger(maxSteps) ||
-      maxSteps < 1 ||
-      maxSteps > 64)
-  ) {
-    throw new Error("maxSteps must be an integer between 1 and 64.");
   }
   const parsedProvider = parseProviderConfig(provider);
   if (
@@ -476,7 +465,6 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     runId,
     projectId,
     task,
-    ...(maxSteps === undefined ? {} : { maxSteps }),
     ...(parsedProvider === undefined ? {} : { provider: parsedProvider }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     ...(parsedMessages === undefined ? {} : { messages: parsedMessages }),

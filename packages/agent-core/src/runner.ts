@@ -1,5 +1,4 @@
 import {
-  toolFailure,
   type ToolError,
   type ToolRegistry,
   type ToolResult
@@ -19,7 +18,6 @@ import type {
 export interface DefaultAgentRunnerOptions {
   readonly provider: AgentProvider;
   readonly tools: ToolRegistry;
-  readonly maxSteps?: number;
   readonly systemPrompt?: string;
   readonly now?: () => number;
   readonly onEvent?: (event: AgentEvent) => void;
@@ -70,19 +68,13 @@ const toToolContent = (result: ToolResult<unknown>): string => {
 export class DefaultAgentRunner implements AgentRunner {
   readonly #provider: AgentProvider;
   readonly #tools: ToolRegistry;
-  readonly #maxSteps: number;
   readonly #systemPrompt: string | undefined;
   readonly #now: () => number;
   readonly #onEvent: ((event: AgentEvent) => void) | undefined;
 
   public constructor(options: DefaultAgentRunnerOptions) {
-    const maxSteps = options.maxSteps ?? 8;
-    if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) {
-      throw new Error("maxSteps must be a positive safe integer.");
-    }
     this.#provider = options.provider;
     this.#tools = options.tools;
-    this.#maxSteps = maxSteps;
     this.#systemPrompt = options.systemPrompt;
     this.#now = options.now ?? Date.now;
     this.#onEvent = options.onEvent;
@@ -153,7 +145,7 @@ export class DefaultAgentRunner implements AgentRunner {
 
     const seenCallIds = new Set<string>();
     let runUsage: ProviderTokenUsage | undefined;
-    for (let step = 1; step <= this.#maxSteps; step += 1) {
+    for (let step = 1; ; step += 1) {
       if (signal.aborted) {
         return cancelled(step - 1);
       }
@@ -296,11 +288,5 @@ export class DefaultAgentRunner implements AgentRunner {
         }
       }
     }
-
-    const maxStepsResult = toolFailure(
-      "MAX_STEPS_EXCEEDED",
-      `Agent exceeded the maximum of ${this.#maxSteps} steps.`,
-    );
-    return failed(this.#maxSteps, maxStepsResult.error);
   }
 }

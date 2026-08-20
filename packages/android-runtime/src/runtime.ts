@@ -98,7 +98,6 @@ export class AndroidAgentRuntime {
     const runner = new DefaultAgentRunner({
       provider: this.#providerFactory(request),
       tools: registry,
-      maxSteps: request.maxSteps ?? 8,
       ...(request.systemPrompt === undefined
         ? {}
         : { systemPrompt: request.systemPrompt }),

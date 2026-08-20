@@ -129,7 +129,6 @@ class RuntimeDynamicToolsWebViewTest {
         .put("runId", runId)
         .put("projectId", PROJECT_ID)
         .put("task", task)
-        .put("maxSteps", 4)
         .put("toolsEnabled", true)
         .put(
             "provider",

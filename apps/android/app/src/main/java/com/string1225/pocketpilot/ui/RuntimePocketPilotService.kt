@@ -40,9 +40,7 @@ import java.io.Closeable
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -292,7 +290,6 @@ class RuntimePocketPilotService(
                     .put("runId", runId)
                     .put("projectId", projectId)
                     .put("task", runtimeTask)
-                    .put("maxSteps", 8)
                     .put("provider", provider)
                     .put(
                         "systemPrompt",
@@ -307,22 +304,7 @@ class RuntimePocketPilotService(
                     .toString(),
             )
             runtimeStarted = true
-            withTimeout(RUN_TIMEOUT_MILLIS) { completion.await() }
-        } catch (timeout: TimeoutCancellationException) {
-            val message = if (runtimeStarted) {
-                "TypeScript Agent Run exceeded the ${RUN_TIMEOUT_MILLIS / 1_000}-second MVP limit"
-            } else {
-                "TypeScript Agent Runtime did not become ready in time"
-            }
-            if (registered) {
-                activeRuns.revoke(runId, projectId)
-                registered = false
-            }
-            runtime.cancel(runId)
-            approvals.cancelRun(runId)
-            if (runCreated) runCatching { agentRuns.finish(runId, AgentRunStatus.FAILED, message) }
-            emit(timeline(TimelineItemKind.ERROR, "Runtime 超时", message, isError = true))
-            AgentRunStatus.FAILED
+            completion.await()
         } catch (cancelled: CancellationException) {
             if (registered) {
                 activeRuns.revoke(runId, projectId)
@@ -594,7 +576,6 @@ class RuntimePocketPilotService(
     }
 
     companion object {
-        private const val RUN_TIMEOUT_MILLIS = 30 * 60 * 1_000L
         private const val MAX_HISTORY_MESSAGES = 80
         private const val MAX_HISTORY_MESSAGE_UTF8_BYTES = 128 * 1024
         private const val MAX_HISTORY_TOTAL_UTF8_BYTES = 512 * 1024
