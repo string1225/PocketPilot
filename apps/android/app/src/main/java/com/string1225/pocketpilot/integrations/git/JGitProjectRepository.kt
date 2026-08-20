@@ -51,6 +51,57 @@ class JGitProjectRepository(
         return GitInitResult(branch = initialBranch)
     }
 
+    /**
+     * Ensures the workspace is a local repository and binds one validated HTTPS remote.
+     * Existing files are never staged or committed by this operation.
+     */
+    fun bindRemote(
+        remoteName: String,
+        remoteUrl: String,
+        initialBranch: String = "main",
+    ) {
+        GitInputPolicy.requireRemoteName(remoteName)
+        val target = GitRemoteTarget.fromHttpsUrl(remoteUrl)
+        GitInputPolicy.requireBranch(initialBranch)
+        checkCancellation()
+
+        if (!File(guard.root, ".git").exists()) {
+            init(initialBranch)
+        }
+        runCancellable {
+            openGit().use { git ->
+                val config = git.repository.config
+                config.setString(
+                    ConfigConstants.CONFIG_REMOTE_SECTION,
+                    remoteName,
+                    ConfigConstants.CONFIG_KEY_URL,
+                    target.url,
+                )
+                // A separately configured push URL could bypass the project binding.
+                config.unset(
+                    ConfigConstants.CONFIG_REMOTE_SECTION,
+                    remoteName,
+                    "pushurl",
+                )
+                config.save()
+                disableRepositoryHooks(git.repository)
+            }
+        }
+    }
+
+    fun removeRemote(remoteName: String) {
+        GitInputPolicy.requireRemoteName(remoteName)
+        runCancellable {
+            openGit().use { git ->
+                git.repository.config.unsetSection(
+                    ConfigConstants.CONFIG_REMOTE_SECTION,
+                    remoteName,
+                )
+                git.repository.config.save()
+            }
+        }
+    }
+
     fun clone(
         remoteUrl: String,
         branch: String? = null,

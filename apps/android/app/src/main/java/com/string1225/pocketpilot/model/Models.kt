@@ -9,6 +9,22 @@ data class Project(
     val updatedAt: Long,
 )
 
+/**
+ * One HTTPS Git remote bound to one PocketPilot project.
+ *
+ * [credentialId] is an opaque reference into Android Keystore-backed storage;
+ * token material is never stored in SQLite or exposed through this model.
+ */
+data class ProjectGitBinding(
+    val projectId: String,
+    val remoteName: String,
+    val remoteUrl: String,
+    val branch: String? = null,
+    val username: String = "git",
+    val credentialId: String? = null,
+    val hasCredential: Boolean = false,
+)
+
 data class WorkspaceEntry(
     val path: String,
     val size: Long,

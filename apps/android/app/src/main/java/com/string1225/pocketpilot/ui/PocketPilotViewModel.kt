@@ -19,6 +19,7 @@ import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.InstalledPlugin
 import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.ProjectGitBinding
 import com.string1225.pocketpilot.model.RemoteServerProfile
 import com.string1225.pocketpilot.model.ThemePreference
 import com.string1225.pocketpilot.model.TimelineItem
@@ -88,6 +89,8 @@ data class PocketPilotUiState(
     val llmConnectionTestSucceeded: Boolean? = null,
     val llmConnectionTestError: String? = null,
     val gitCredentialConfigured: Boolean = false,
+    val projectGitBinding: ProjectGitBinding? = null,
+    val projectGitBindingInProgress: Boolean = false,
     val remoteServers: List<RemoteServerProfile> = emptyList(),
     val plugins: List<InstalledPlugin> = emptyList(),
     val appUpdate: UpdateState,
@@ -192,6 +195,7 @@ class PocketPilotViewModel(
                     timeline = service.listMessages(selected.id).map { it.toTimelineItem() },
                     llmCredentialConfigured = service.hasLlmCredential(),
                     gitCredentialConfigured = service.hasGitCredential(),
+                    projectGitBinding = service.getProjectGitBinding(selected.projectId),
                     remoteServers = service.listRemoteServers(),
                     plugins = service.listPlugins(),
                 )
@@ -211,6 +215,7 @@ class PocketPilotViewModel(
                     onboardingProjectSetupSucceeded = snapshot.onboardingProjectSetupSucceeded,
                     llmCredentialConfigured = snapshot.llmCredentialConfigured,
                     gitCredentialConfigured = snapshot.gitCredentialConfigured,
+                    projectGitBinding = snapshot.projectGitBinding,
                     remoteServers = snapshot.remoteServers,
                     plugins = snapshot.plugins,
                     offlineDemo = service.isOfflineDemo,
@@ -465,6 +470,90 @@ class PocketPilotViewModel(
         }
     }
 
+    fun saveProjectGitBinding(
+        remoteName: String,
+        remoteUrl: String,
+        branch: String?,
+        rawToken: String?,
+    ) {
+        val projectId = mutableState.value.selectedProjectId ?: return
+        if (!ensureProjectIsIdle(projectId) || mutableState.value.projectGitBindingInProgress) return
+        val token = rawToken?.takeIf(String::isNotEmpty)?.toCharArray()
+        mutableState.update { it.copy(projectGitBindingInProgress = true) }
+        viewModelScope.launch {
+            try {
+                val binding = runInterruptible(Dispatchers.IO) {
+                    service.saveProjectGitBinding(
+                        projectId = projectId,
+                        remoteName = remoteName,
+                        remoteUrl = remoteUrl,
+                        branch = branch,
+                        newToken = token,
+                    )
+                }
+                mutableState.update { current ->
+                    if (current.selectedProjectId == projectId) {
+                        current.copy(projectGitBinding = binding, projectGitBindingInProgress = false)
+                    } else {
+                        current.copy(projectGitBindingInProgress = false)
+                    }
+                }
+                postNotice(localized("Git 仓库已绑定到当前项目", "Git repository bound to this project"))
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(projectGitBindingInProgress = false) }
+                throw cancelled
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(projectGitBindingInProgress = false) }
+                postNotice(error.displayMessage(), isError = true)
+            } finally {
+                token?.fill('\u0000')
+            }
+        }
+    }
+
+    fun removeProjectGitBinding() {
+        val projectId = mutableState.value.selectedProjectId ?: return
+        if (!ensureProjectIsIdle(projectId) || mutableState.value.projectGitBindingInProgress) return
+        mutableState.update { it.copy(projectGitBindingInProgress = true) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { service.removeProjectGitBinding(projectId) }
+                mutableState.update { current ->
+                    if (current.selectedProjectId == projectId) {
+                        current.copy(projectGitBinding = null, projectGitBindingInProgress = false)
+                    } else {
+                        current.copy(projectGitBindingInProgress = false)
+                    }
+                }
+                postNotice(localized("已解除 Git 绑定，本地仓库和文件未删除", "Git binding removed; local files were kept"))
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(projectGitBindingInProgress = false) }
+                postNotice(error.displayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun removeProjectGitCredential() {
+        val projectId = mutableState.value.selectedProjectId ?: return
+        if (!ensureProjectIsIdle(projectId) || mutableState.value.projectGitBindingInProgress) return
+        mutableState.update { it.copy(projectGitBindingInProgress = true) }
+        viewModelScope.launch {
+            try {
+                val binding = withContext(Dispatchers.IO) { service.removeProjectGitCredential(projectId) }
+                mutableState.update { current ->
+                    current.copy(
+                        projectGitBinding = if (current.selectedProjectId == projectId) binding else current.projectGitBinding,
+                        projectGitBindingInProgress = false,
+                    )
+                }
+                postNotice(localized("已移除当前项目的 Personal access token", "Personal access token removed"))
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(projectGitBindingInProgress = false) }
+                postNotice(error.displayMessage(), isError = true)
+            }
+        }
+    }
+
     fun selectProject(projectId: String) {
         if (!canChangeContext()) return
         val project = mutableState.value.projects.firstOrNull { it.id == projectId } ?: return
@@ -652,6 +741,8 @@ class PocketPilotViewModel(
                 pendingApproval = null,
                 agentInput = "",
                 agentAttachments = emptyList(),
+                projectGitBinding = null,
+                projectGitBindingInProgress = false,
             )
         }
         syncCoordinatorState(
@@ -671,6 +762,7 @@ class PocketPilotViewModel(
                     files = service.listFiles(projectId),
                     checkpoints = service.listCheckpoints(projectId),
                     timeline = service.listMessages(conversationId).map { it.toTimelineItem() },
+                    gitBinding = service.getProjectGitBinding(projectId),
                 )
             }
             mutableState.update { current ->
@@ -689,6 +781,7 @@ class PocketPilotViewModel(
                                     .filter { it.conversationId == conversationId }
                                     .map { it.userItem },
                         ),
+                        projectGitBinding = content.gitBinding,
                     )
                 } else {
                     current
@@ -1494,6 +1587,7 @@ private data class InitialSnapshot(
     val timeline: List<TimelineItem>,
     val llmCredentialConfigured: Boolean,
     val gitCredentialConfigured: Boolean,
+    val projectGitBinding: ProjectGitBinding?,
     val remoteServers: List<RemoteServerProfile>,
     val plugins: List<InstalledPlugin>,
 )
@@ -1509,6 +1603,7 @@ private data class SelectionContent(
     val files: List<WorkspaceEntry>,
     val checkpoints: List<Checkpoint>,
     val timeline: List<TimelineItem>,
+    val gitBinding: ProjectGitBinding?,
 )
 
 private data class ConversationTarget(

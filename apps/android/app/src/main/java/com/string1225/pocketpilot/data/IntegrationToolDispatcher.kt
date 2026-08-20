@@ -28,7 +28,6 @@ import com.string1225.pocketpilot.runtime.NativeToolResult
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
 import com.string1225.pocketpilot.runtime.ToolDispatchException
 import com.string1225.pocketpilot.runtime.ToolRequestDispatcher
-import com.string1225.pocketpilot.security.CredentialIds
 import com.string1225.pocketpilot.security.SecureCredentialStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -48,6 +47,7 @@ class IntegrationToolDispatcher(
     private val checkpoints: CheckpointRepository,
     private val sshServers: SshServerRepository,
     private val credentials: SecureCredentialStore,
+    private val gitBindings: GitBindingRepository,
     private val activeRuns: ActiveRunRegistry,
     private val approvals: ToolApprovalCoordinator,
     private val fallback: ToolRequestDispatcher,
@@ -107,7 +107,7 @@ class IntegrationToolDispatcher(
                     val target = GitRemoteTarget.fromHttpsUrl(arguments.requiredString("remoteUrl"))
                     val branch = arguments.optionalString("branch")?.also(GitInputPolicy::requireBranch)
                     val timeoutMillis = arguments.gitTimeoutMillis()
-                    val credential = gitCredential(arguments, listOf(target))
+                    val credential = gitCredential(request.projectId, arguments, listOf(target))
                     approve(
                         request,
                         "Allow Agent to clone this repository?",
@@ -260,7 +260,7 @@ class IntegrationToolDispatcher(
                     val branch = arguments.optionalString("branch")?.also(GitInputPolicy::requireBranch)
                     val timeoutMillis = arguments.gitTimeoutMillis()
                     val targets = repository.configuredRemoteTargets(remote, pushing = false)
-                    val credential = gitCredential(arguments, targets)
+                    val credential = gitCredential(request.projectId, arguments, targets)
                     approve(
                         request,
                         "Allow Agent to pull Git changes?",
@@ -310,7 +310,7 @@ class IntegrationToolDispatcher(
                         .also(GitInputPolicy::requireRemoteName)
                     val timeoutMillis = arguments.gitTimeoutMillis()
                     val targets = repository.configuredRemoteTargets(remote, pushing = true)
-                    val credential = gitCredential(arguments, targets)
+                    val credential = gitCredential(request.projectId, arguments, targets)
                     approve(
                         request,
                         "Allow Agent to push Git changes?",
@@ -530,18 +530,24 @@ class IntegrationToolDispatcher(
     }
 
     private fun gitCredential(
+        projectId: String,
         arguments: JSONObject,
         targets: Collection<GitRemoteTarget>,
     ): GitHttpsCredentialRef? {
         val useCredential = arguments.booleanOrDefault("useCredential", false)
         if (!useCredential) return null
-        if (!credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)) {
-            throw ToolDispatchException("GIT_CREDENTIAL_MISSING", "Git credential is not configured")
+        gitBindings.credentialFor(projectId, targets)?.let { return it }
+        val binding = gitBindings.get(projectId)
+            ?: throw ToolDispatchException(
+                "GIT_BINDING_MISSING",
+                "Bind this project to its Git HTTPS repository before releasing a credential",
+            )
+        if (!binding.hasCredential) {
+            throw ToolDispatchException("GIT_CREDENTIAL_MISSING", "This project's Personal access token is missing")
         }
-        return GitHttpsCredentialRef(
-            username = arguments.stringOrDefault("username", "git"),
-            tokenCredentialId = CredentialIds.DEFAULT_GIT_TOKEN,
-            allowedRemoteUrls = targets.map(GitRemoteTarget::url).toSet(),
+        throw ToolDispatchException(
+            "GIT_CREDENTIAL_TARGET_MISMATCH",
+            "This project's Personal access token is bound to ${binding.remoteUrl} and cannot be sent elsewhere",
         )
     }
 

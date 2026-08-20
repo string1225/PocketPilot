@@ -13,6 +13,7 @@ import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.IntegrationToolDispatcher
 import com.string1225.pocketpilot.data.HttpToolDispatcher
 import com.string1225.pocketpilot.data.GitProjectSetupRepository
+import com.string1225.pocketpilot.data.GitBindingRepository
 import com.string1225.pocketpilot.data.ProjectRepository
 import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
@@ -88,7 +89,13 @@ class PocketPilotApplication : Application() {
         val activeRuns = ActiveRunRegistry()
         val approvals = ToolApprovalCoordinator()
         credentialStore = AndroidKeystoreCredentialStore(this)
-        val gitProjectSetup = GitProjectSetupRepository(projects, checkpoints, credentialStore)
+        val gitBindings = GitBindingRepository(database, projects, credentialStore)
+        val gitProjectSetup = GitProjectSetupRepository(
+            projects,
+            checkpoints,
+            credentialStore,
+            gitBindings,
+        )
         attachmentImageStore = FileAttachmentImageStore(this)
         updateManager = GitHubReleaseUpdateManager(this)
         settings.migrateLegacyLlmConnection(
@@ -107,6 +114,7 @@ class PocketPilotApplication : Application() {
                 checkpoints = checkpoints,
                 sshServers = sshServers,
                 credentials = credentialStore,
+                gitBindings = gitBindings,
                 activeRuns = activeRuns,
                 approvals = approvals,
                 fallback = workspaceDispatcher,
@@ -138,6 +146,7 @@ class PocketPilotApplication : Application() {
             RuntimePocketPilotService(
                 projects = projects,
                 gitProjectSetup = gitProjectSetup,
+                gitBindings = gitBindings,
                 workspace = workspace,
                 checkpoints = checkpoints,
                 agentRuns = agentRuns,
@@ -160,6 +169,7 @@ class PocketPilotApplication : Application() {
             OfflinePocketPilotService(
                 projects = projects,
                 gitProjectSetup = gitProjectSetup,
+                gitBindings = gitBindings,
                 workspace = workspace,
                 checkpoints = checkpoints,
                 agentRuns = agentRuns,

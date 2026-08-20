@@ -15,10 +15,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -63,6 +66,7 @@ fun FilesScreen(
         state.agentStatus != AgentRunStatus.WAITING_FOR_APPROVAL
     if (state.selectedFilePath == null) {
         FileBrowser(
+            projectId = state.selectedProjectId.orEmpty(),
             files = state.files,
             language = language,
             mutationsEnabled = mutationsEnabled,
@@ -87,6 +91,7 @@ fun FilesScreen(
 
 @Composable
 private fun FileBrowser(
+    projectId: String,
     files: List<WorkspaceEntry>,
     language: AppLanguage,
     mutationsEnabled: Boolean,
@@ -96,6 +101,11 @@ private fun FileBrowser(
 ) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }
+    var expandedDirectories by rememberSaveable(projectId) { mutableStateOf(emptySet<String>()) }
+    val tree = remember(files) { buildWorkspaceTree(files) }
+    val visibleNodes = remember(tree, expandedDirectories) {
+        visibleWorkspaceTree(tree, expandedDirectories)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -140,14 +150,39 @@ private fun FileBrowser(
             )
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(files, key = { it.path }) { file ->
-                    FileRow(
-                        file = file,
-                        language = language,
-                        mutationsEnabled = mutationsEnabled,
-                        onOpen = { onOpenFile(file.path) },
-                        onDelete = { deleteTarget = file.path },
-                    )
+                items(
+                    visibleNodes,
+                    key = { visible ->
+                        when (visible.node) {
+                            is WorkspaceTreeNode.Directory -> "directory:${visible.node.path}"
+                            is WorkspaceTreeNode.File -> "file:${visible.node.path}"
+                        }
+                    },
+                ) { visible ->
+                    when (val node = visible.node) {
+                        is WorkspaceTreeNode.Directory -> DirectoryRow(
+                            directory = node,
+                            depth = visible.depth,
+                            expanded = node.path in expandedDirectories,
+                            onToggle = {
+                                expandedDirectories = if (node.path in expandedDirectories) {
+                                    expandedDirectories - node.path
+                                } else {
+                                    expandedDirectories + node.path
+                                }
+                            },
+                        )
+
+                        is WorkspaceTreeNode.File -> FileRow(
+                            file = node.entry,
+                            displayName = node.name,
+                            depth = visible.depth,
+                            language = language,
+                            mutationsEnabled = mutationsEnabled,
+                            onOpen = { onOpenFile(node.path) },
+                            onDelete = { deleteTarget = node.path },
+                        )
+                    }
                 }
             }
         }
@@ -178,8 +213,50 @@ private fun FileBrowser(
 }
 
 @Composable
+private fun DirectoryRow(
+    directory: WorkspaceTreeNode.Directory,
+    depth: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(start = (12 + depth * 20).dp, top = 8.dp, bottom = 8.dp, end = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+        )
+        Icon(
+            if (expanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            directory.name,
+            modifier = Modifier.weight(1f),
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            directory.children.size.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider(modifier = Modifier.padding(start = (52 + depth * 20).dp))
+}
+
+@Composable
 private fun FileRow(
     file: WorkspaceEntry,
+    displayName: String,
+    depth: Int,
     language: AppLanguage,
     mutationsEnabled: Boolean,
     onOpen: () -> Unit,
@@ -189,13 +266,13 @@ private fun FileRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onOpen)
-            .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+            .padding(start = (16 + depth * 20).dp, top = 9.dp, bottom = 9.dp, end = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Default.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         Column(modifier = Modifier.weight(1f)) {
-            Text(file.path, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 "${formatFileSize(file.size)} · ${formatTimestamp(file.modifiedAt)}",
                 style = MaterialTheme.typography.bodySmall,
@@ -209,7 +286,7 @@ private fun FileRow(
             )
         }
     }
-    HorizontalDivider(modifier = Modifier.padding(start = 52.dp))
+    HorizontalDivider(modifier = Modifier.padding(start = (52 + depth * 20).dp))
 }
 
 @Composable

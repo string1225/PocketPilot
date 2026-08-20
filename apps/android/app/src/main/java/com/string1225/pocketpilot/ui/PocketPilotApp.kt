@@ -23,16 +23,18 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Inventory2
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,12 +60,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.Conversation
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.ProjectGitBinding
+import com.string1225.pocketpilot.integrations.git.GitInputPolicy
 import kotlinx.coroutines.launch
 
 private const val LIBRARY_PAGE = 0
@@ -85,6 +90,7 @@ fun PocketPilotApp(
     val scope = rememberCoroutineScope()
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showCreateProject by rememberSaveable { mutableStateOf(false) }
+    var showGitBinding by rememberSaveable { mutableStateOf(false) }
     var deleteProject by remember { mutableStateOf<Project?>(null) }
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
 
@@ -260,7 +266,6 @@ fun PocketPilotApp(
                                 state = state,
                                 onSelectProject = { projectId ->
                                     viewModel.selectProject(projectId)
-                                    scope.launch { pagerState.animateScrollToPage(CHAT_PAGE) }
                                 },
                                 onSelectConversation = { conversationId ->
                                     viewModel.selectConversation(conversationId)
@@ -273,6 +278,7 @@ fun PocketPilotApp(
                                 onDeleteConversation = viewModel::deleteConversation,
                                 onCreateProject = { showCreateProject = true },
                                 onDeleteProject = { deleteProject = it },
+                                onConfigureGit = { showGitBinding = true },
                             )
 
                             CHAT_PAGE -> AgentScreen(
@@ -398,6 +404,28 @@ fun PocketPilotApp(
             )
         }
 
+        state.selectedProject?.takeIf { showGitBinding }?.let { selectedProject ->
+            ProjectGitBindingDialog(
+                project = selectedProject,
+                binding = state.projectGitBinding,
+                inProgress = state.projectGitBindingInProgress,
+                language = language,
+                onDismiss = { if (!state.projectGitBindingInProgress) showGitBinding = false },
+                onSave = { remoteName, remoteUrl, branch, token ->
+                    showGitBinding = false
+                    viewModel.saveProjectGitBinding(remoteName, remoteUrl, branch, token)
+                },
+                onRemoveCredential = {
+                    showGitBinding = false
+                    viewModel.removeProjectGitCredential()
+                },
+                onUnbind = {
+                    showGitBinding = false
+                    viewModel.removeProjectGitBinding()
+                },
+            )
+        }
+
         deleteProject?.let { project ->
             AlertDialog(
                 onDismissRequest = { deleteProject = null },
@@ -495,6 +523,7 @@ private fun LibraryScreen(
     onDeleteConversation: (String) -> Unit,
     onCreateProject: () -> Unit,
     onDeleteProject: (Project) -> Unit,
+    onConfigureGit: () -> Unit,
 ) {
     val language = state.settings.language
     val selectedProjectId = state.selectedProjectId
@@ -503,7 +532,7 @@ private fun LibraryScreen(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (state.offlineDemo) {
             item {
@@ -533,15 +562,17 @@ private fun LibraryScreen(
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.projects, key = { it.id }) { project ->
-                    AssistChip(
+                    val selected = project.id == selectedProjectId
+                    FilterChip(
+                        selected = selected,
                         onClick = { onSelectProject(project.id) },
                         label = { Text(project.name) },
                         leadingIcon = {
                             Icon(
-                                Icons.Default.FolderOpen,
+                                if (selected) Icons.Default.Check else Icons.Default.FolderOpen,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
-                                tint = if (project.id == selectedProjectId) {
+                                tint = if (selected) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -557,9 +588,21 @@ private fun LibraryScreen(
                                     .clickable { onDeleteProject(project) },
                             )
                         },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
                     )
                 }
             }
+        }
+        item {
+            ProjectGitBindingCard(
+                binding = state.projectGitBinding,
+                inProgress = state.projectGitBindingInProgress,
+                language = language,
+                onConfigure = onConfigureGit,
+            )
         }
         item {
             Row(
@@ -609,6 +652,209 @@ private fun LibraryScreen(
 }
 
 @Composable
+private fun ProjectGitBindingCard(
+    binding: ProjectGitBinding?,
+    inProgress: Boolean,
+    language: AppLanguage,
+    onConfigure: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (binding == null) {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            } else {
+                MaterialTheme.colorScheme.primaryContainer
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    ppText(language, "当前项目的 Git 仓库", "Git repository for this project"),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (binding == null) {
+                    Text(
+                        ppText(language, "未绑定。绑定后，PAT 只会发给这个仓库。", "Not bound. Its PAT will be released only to the bound repository."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "${binding.remoteName} · ${binding.remoteUrl}",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (binding.hasCredential) {
+                            ppText(language, "Personal access token 已加密保存", "Personal access token is encrypted")
+                        } else {
+                            ppText(language, "未保存 Personal access token（仅适合公开仓库）", "No Personal access token (public repositories only)")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (inProgress) {
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+            } else {
+                TextButton(onClick = onConfigure) {
+                    Text(ppText(language, if (binding == null) "绑定" else "管理", if (binding == null) "Bind" else "Manage"))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectGitBindingDialog(
+    project: Project,
+    binding: ProjectGitBinding?,
+    inProgress: Boolean,
+    language: AppLanguage,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String?, String?) -> Unit,
+    onRemoveCredential: () -> Unit,
+    onUnbind: () -> Unit,
+) {
+    var remoteName by rememberSaveable(project.id) { mutableStateOf(binding?.remoteName ?: "origin") }
+    var remoteUrl by rememberSaveable(project.id) { mutableStateOf(binding?.remoteUrl.orEmpty()) }
+    var branch by rememberSaveable(project.id) { mutableStateOf(binding?.branch.orEmpty()) }
+    var token by remember(project.id) { mutableStateOf("") }
+    val normalizedBranch = branch.trim().takeIf(String::isNotEmpty)
+    val valid = runCatching {
+        GitInputPolicy.requireRemoteName(remoteName.trim())
+        GitInputPolicy.requireHttpsRemote(remoteUrl.trim())
+        normalizedBranch?.let(GitInputPolicy::requireBranch)
+    }.isSuccess
+
+    AlertDialog(
+        onDismissRequest = { if (!inProgress) onDismiss() },
+        title = { Text(ppText(language, "绑定 Git 仓库", "Bind Git repository")) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    ppText(
+                        language,
+                        "配置只属于“${project.name}”。本地 Workspace 路径由 PocketPilot 管理，这里的路径应填写 HTTPS 仓库 URL。",
+                        "This configuration belongs only to “${project.name}”. PocketPilot manages the local Workspace path; enter the HTTPS repository URL here.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = remoteName,
+                    onValueChange = { remoteName = it.take(128) },
+                    label = { Text(ppText(language, "名称（Git remote）", "Name (Git remote)")) },
+                    placeholder = { Text("origin") },
+                    singleLine = true,
+                    enabled = !inProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = remoteUrl,
+                    onValueChange = { remoteUrl = it.take(4_096) },
+                    label = { Text(ppText(language, "仓库路径（HTTPS URL）", "Repository path (HTTPS URL)")) },
+                    placeholder = { Text("https://github.com/owner/repository.git") },
+                    singleLine = true,
+                    enabled = !inProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = branch,
+                    onValueChange = { branch = it.take(256) },
+                    label = { Text(ppText(language, "默认分支（可选）", "Default branch (optional)")) },
+                    placeholder = { Text("main") },
+                    singleLine = true,
+                    enabled = !inProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = { token = it.take(16_384) },
+                    label = { Text("Personal access token (PAT)") },
+                    placeholder = {
+                        Text(
+                            if (binding?.hasCredential == true) {
+                                ppText(language, "留空则保留已保存的 PAT", "Leave blank to keep the saved PAT")
+                            } else {
+                                ppText(language, "私有仓库或推送时需要", "Required for private repositories or push")
+                            },
+                        )
+                    },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !inProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    ppText(
+                        language,
+                        "GitHub 建议使用 fine-grained PAT，仅授权这个仓库及所需的 Contents 读/写权限。创建入口：github.com/settings/tokens。其他 Git 服务请填写对应的 HTTPS access token。",
+                        "For GitHub, prefer a fine-grained PAT limited to this repository and the required Contents read/write permission. Create one at github.com/settings/tokens. For other Git hosts, use their HTTPS access token.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (binding != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (binding.hasCredential) {
+                            TextButton(onClick = onRemoveCredential, enabled = !inProgress) {
+                                Text(ppText(language, "移除 PAT", "Remove PAT"))
+                            }
+                        }
+                        TextButton(onClick = onUnbind, enabled = !inProgress) {
+                            Text(
+                                ppText(language, "解除绑定", "Unbind"),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        remoteName.trim(),
+                        remoteUrl.trim(),
+                        normalizedBranch,
+                        token.takeIf(String::isNotEmpty),
+                    )
+                    token = ""
+                },
+                enabled = valid && !inProgress,
+            ) {
+                if (inProgress) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(ppText(language, "保存", "Save"))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !inProgress) {
+                Text(ppText(language, "取消", "Cancel"))
+            }
+        },
+    )
+}
+
+@Composable
 private fun ConversationCard(
     conversation: Conversation,
     selected: Boolean,
@@ -616,36 +862,54 @@ private fun ConversationCard(
     onOpen: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+        ),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpen)
-                .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+                .padding(start = 12.dp, top = 5.dp, bottom = 5.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.Chat,
                 contentDescription = null,
                 tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
             )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(conversation.title, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    ppText(
-                        language,
-                        "更新于 ${formatTimestamp(conversation.updatedAt)}",
-                        "Updated ${formatTimestamp(conversation.updatedAt)}",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
+                    conversation.title,
+                    modifier = Modifier.weight(1f),
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    formatTimestamp(conversation.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
-            IconButton(onClick = onDelete) {
+            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Default.DeleteOutline,
                     contentDescription = ppText(language, "删除会话", "Delete chat"),
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }

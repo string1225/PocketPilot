@@ -58,7 +58,7 @@ Projects & conversations <- Chat -> Artifacts
 - 未保存编辑在切项目、Restore、启动 Agent 等冲突动作前阻止覆盖。
 - 通知 deep link 同时携带 projectId/conversationId，冷启动和已有 Activity 都会校验关系后导航。
 
-SQLite v5 主要表：
+SQLite v6 主要表：
 
 ```text
 projects -> conversations -> messages
@@ -85,6 +85,8 @@ plugins (manifest metadata + content hash; source stays in private files)
 Android 使用只加载 `android_asset` 的 WebView 运行 IIFE bundle。Bridge 使用版本化 envelope，所有请求携带 `id/runId/projectId`；Native 校验活动 Run 和 Project 绑定，响应也必须匹配同一上下文。WebView 禁止外部导航、文件/内容访问和弹窗，网络 LLM 请求由 Native 完成，不受 CORS 影响。
 
 `deepseek-harness-master`（DSH）仅作为结构化事件、Tool 配对、取消和权限分层的设计参考。PocketPilot 与 DSH 没有 npm/workspace、Git submodule 或运行时依赖关系；当前内核是独立实现的纯 TypeScript Web Runtime，其桌面 Node/Cordis/native host 依赖未移植到 Android。
+
+`pi-main` 也仅作为设计参考。对照评审显示，PocketPilot 下一步应优先补齐基于模型 token window 的 context compaction、Provider finish reason 与截断 Tool Call 防护，再考虑安全的并行 Tool 调度和同一 Run steering/follow-up。详细结论见 [Agent Kernel 与 pi 对照评审](PI_AGENT_KERNEL_REVIEW.md)。
 
 ## 5. LLM Provider
 
@@ -131,9 +133,11 @@ Settings password field
 
 Android 由 JGit 实现：init/clone/status/diff/commit/pull/push。Repository 永久绑定当前 Project 的 canonical Workspace；拒绝 linked worktree、gitdir 文件和 Workspace/.git 符号链接。
 
+- `git_config` 以 `project_id` 为主键，保存 remote 名称、HTTPS URL、首选分支、用户名和不透明 credential id；项目 Token 使用 `git.project.<projectId>.token`，密文由 Android Keystore 保护。
+- Native 只在 Git 实际目标与该项目绑定的规范化 HTTPS URL 完全一致时释放项目 Token，防止模型把 PAT 发往其他 host 或仓库。
 - status/diff 只读。
 - init/clone/commit/pull/push Native 逐次审批。
-- 私有 HTTPS Token 绑定允许的远端 host；审批明确显示主机和是否释放凭据。
+- GitHub HTTPS Token 在产品文案中称为 **Personal access token (PAT)**；优先建议 fine-grained PAT，只授权当前仓库及必要的 Contents 读/写权限。其他 Git 服务可使用其对应的 HTTPS access token。
 - pull merge/rebase 失败、push remote rejection 都返回 Tool failure。
 - 取消会传递给 JGit progress/transport；无法证明远端状态时明确返回“结果未知”并要求重查。
 
@@ -142,6 +146,7 @@ Android 由 JGit 实现：init/clone/status/diff/commit/pull/push。Repository �
 SSH 仅是 `ssh.execute`，不是远程 Workspace。配置包含 server id、host、port、username、认证方式、固定 `SHA256:` 主机公钥指纹、credential id 和说明。
 
 - 使用 SSHJ 严格 HostKeyVerifier；不接受 TOFU/Promiscuous verifier。
+- 密码/私钥只证明“客户端是谁”，主机公钥指纹证明“连接到的服务器是谁”；省略验证会让中间人有机会截获密码或代理命令。后续可增加连接前扫描公钥、展示算法与 SHA-256、由用户在可信渠道核对后一次确认的引导，但不能静默信任首次看到的 key。
 - `apps/android/sshj-android` 对 SSHJ 0.40.0 做可复现、哈希固定的最小 Android Ed25519 兼容构建；只让 Ed25519 使用未注册的 bundled Provider 实例，不新增、替换或重排进程全局 JCA Provider。
 - 支持密码和未加密 PEM/OpenSSH 私钥；秘密只在一次连接期间短暂解密并清零可擦除缓冲。加密私钥 passphrase 是后续扩展。
 - 命令在进入审批 UI 前做类型、长度、NUL/控制符、timeout 和输出预算校验。

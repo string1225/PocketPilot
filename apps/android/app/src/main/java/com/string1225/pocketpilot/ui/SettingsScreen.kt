@@ -118,7 +118,6 @@ fun SettingsScreen(
     var showLanguage by rememberSaveable { mutableStateOf(false) }
     var showModelSettings by rememberSaveable { mutableStateOf(false) }
     var showRemoteServers by rememberSaveable { mutableStateOf(false) }
-    var showGitCredential by rememberSaveable { mutableStateOf(false) }
     var showTools by rememberSaveable { mutableStateOf(false) }
     var showPlugins by rememberSaveable { mutableStateOf(false) }
     var showAppUpdate by rememberSaveable { mutableStateOf(false) }
@@ -210,18 +209,6 @@ fun SettingsScreen(
                         ppText(language, "已停用", "Disabled")
                     },
                     onClick = { showTools = true },
-                )
-            }
-            item {
-                SettingsValueRow(
-                    icon = Icons.Default.Key,
-                    title = ppText(language, "Git HTTPS 凭据", "Git HTTPS credential"),
-                    value = if (gitCredentialConfigured) {
-                        ppText(language, "已安全保存", "Stored securely")
-                    } else {
-                        ppText(language, "仅支持公开仓库", "Public repositories only")
-                    },
-                    onClick = { showGitCredential = true },
                 )
             }
             item {
@@ -318,23 +305,6 @@ fun SettingsScreen(
                 showModelSettings = false
                 onClearLlmConnectionTestResult()
                 onRemoveLlmCredential()
-            },
-        )
-    }
-
-    if (showGitCredential) {
-        CredentialDialog(
-            language = language,
-            title = ppText(language, "Git HTTPS Token", "Git HTTPS token"),
-            configured = gitCredentialConfigured,
-            onDismiss = { showGitCredential = false },
-            onSave = {
-                showGitCredential = false
-                onSaveGitCredential(it)
-            },
-            onRemove = {
-                showGitCredential = false
-                onRemoveGitCredential()
             },
         )
     }

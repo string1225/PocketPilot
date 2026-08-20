@@ -4,6 +4,7 @@ import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.GitProjectSetupRepository
+import com.string1225.pocketpilot.data.GitBindingRepository
 import com.string1225.pocketpilot.data.ProjectRepository
 import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
@@ -17,6 +18,7 @@ import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.ProjectGitBinding
 import com.string1225.pocketpilot.model.InstalledPlugin
 import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.LlmProtocolPreference
@@ -64,6 +66,16 @@ interface PocketPilotService {
         newToken: CharArray?,
     ): Project
     suspend fun deleteProject(projectId: String)
+    fun getProjectGitBinding(projectId: String): ProjectGitBinding?
+    fun saveProjectGitBinding(
+        projectId: String,
+        remoteName: String,
+        remoteUrl: String,
+        branch: String?,
+        newToken: CharArray?,
+    ): ProjectGitBinding
+    fun removeProjectGitBinding(projectId: String)
+    fun removeProjectGitCredential(projectId: String): ProjectGitBinding?
 
     fun listConversations(projectId: String? = null): List<Conversation>
     fun createConversation(projectId: String, title: String): Conversation
@@ -134,6 +146,7 @@ interface PocketPilotService {
 class OfflinePocketPilotService(
     private val projects: ProjectRepository,
     private val gitProjectSetup: GitProjectSetupRepository,
+    private val gitBindings: GitBindingRepository,
     private val workspace: WorkspaceRepository,
     private val checkpoints: CheckpointRepository,
     private val agentRuns: AgentRunRepository,
@@ -174,7 +187,28 @@ class OfflinePocketPilotService(
 
     override suspend fun deleteProject(projectId: String) {
         projects.delete(projectId)
+        gitBindings.deleteCredentialForProject(projectId)
         if (projects.list().isEmpty()) projects.create("个人项目")
+    }
+
+    override fun getProjectGitBinding(projectId: String): ProjectGitBinding? = gitBindings.get(projectId)
+
+    override fun saveProjectGitBinding(
+        projectId: String,
+        remoteName: String,
+        remoteUrl: String,
+        branch: String?,
+        newToken: CharArray?,
+    ): ProjectGitBinding = pluginRuns.mutate {
+        gitBindings.save(projectId, remoteName, remoteUrl, branch, newToken = newToken)
+    }
+
+    override fun removeProjectGitBinding(projectId: String) = pluginRuns.mutate {
+        gitBindings.remove(projectId)
+    }
+
+    override fun removeProjectGitCredential(projectId: String): ProjectGitBinding? = pluginRuns.mutate {
+        gitBindings.removeCredential(projectId)
     }
 
     override fun listConversations(projectId: String?): List<Conversation> = conversations.list(projectId)

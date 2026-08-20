@@ -24,16 +24,19 @@ class GitProjectSetupRepository internal constructor(
     private val projects: ProjectRepository,
     private val checkpoints: CheckpointRepository,
     private val credentials: SecureCredentialStore,
+    private val gitBindings: GitBindingRepository,
     private val repositoryFactory: GitProjectCloneClientFactory,
 ) {
     constructor(
         projects: ProjectRepository,
         checkpoints: CheckpointRepository,
         credentials: SecureCredentialStore,
+        gitBindings: GitBindingRepository,
     ) : this(
         projects = projects,
         checkpoints = checkpoints,
         credentials = credentials,
+        gitBindings = gitBindings,
         repositoryFactory = GitProjectCloneClientFactory { workspace, resolver, cancellationCheck ->
             JGitProjectCloneClient(
                 JGitProjectRepository(
@@ -66,7 +69,7 @@ class GitProjectSetupRepository internal constructor(
         )
         var project: Project? = null
         var repository: GitProjectCloneClient? = null
-        var credentialReplacement: GitCredentialReplacement? = null
+        var copiedStoredToken: CharArray? = null
 
         try {
             project = projects.beginProvisioning(projectName)
@@ -86,16 +89,23 @@ class GitProjectSetupRepository internal constructor(
                 description = "从 Git 克隆项目",
             )
             projects.touch(project.id)
-            // Clearing the marker commits project validity. Only then may a newly entered
-            // process-wide credential reach durable storage.
+            // Clearing the marker commits project validity. Only then may a credential be
+            // copied into the new project's dedicated Keystore record and binding row.
             projects.completeProvisioning(project.id)
-            if (newToken != null) {
-                credentialReplacement = GitCredentialReplacement(
-                    credentials,
-                    CredentialIds.DEFAULT_GIT_TOKEN,
-                )
-                credentialReplacement.replace(newToken)
+            copiedStoredToken = if (newToken == null && useStoredCredential) {
+                credentials.get(CredentialIds.DEFAULT_GIT_TOKEN)
+                    ?: throw IllegalStateException("Configured Git credential is unavailable")
+            } else {
+                null
             }
+            gitBindings.save(
+                projectId = project.id,
+                remoteName = GitBindingRepository.DEFAULT_REMOTE_NAME,
+                remoteUrl = target.url,
+                branch = normalizedBranch,
+                username = normalizedUsername,
+                newToken = newToken ?: copiedStoredToken,
+            )
             return projects.list().first { it.id == project.id }
         } catch (failure: Throwable) {
             repository?.let { cloneRepository ->
@@ -108,10 +118,14 @@ class GitProjectSetupRepository internal constructor(
                     .exceptionOrNull()
                     ?.let(failure::addSuppressed)
             }
-            credentialReplacement?.rollbackAfter(failure)
+            project?.let { createdProject ->
+                runCatching { gitBindings.deleteCredentialForProject(createdProject.id) }
+                    .exceptionOrNull()
+                    ?.let(failure::addSuppressed)
+            }
             throw failure
         } finally {
-            credentialReplacement?.close()
+            copiedStoredToken?.fill('\u0000')
         }
     }
 

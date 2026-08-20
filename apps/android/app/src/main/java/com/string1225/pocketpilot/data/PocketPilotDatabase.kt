@@ -88,8 +88,10 @@ class PocketPilotDatabase(
             """
             CREATE TABLE git_config (
                 project_id TEXT PRIMARY KEY NOT NULL,
+                remote_name TEXT NOT NULL DEFAULT 'origin',
                 remote_url TEXT,
                 branch TEXT,
+                username TEXT NOT NULL DEFAULT 'git',
                 credential_id TEXT,
                 FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
@@ -157,6 +159,24 @@ class PocketPilotDatabase(
             db.execSQL("ALTER TABLE messages ADD COLUMN completion_tokens INTEGER")
             db.execSQL("ALTER TABLE messages ADD COLUMN total_tokens INTEGER")
             db.execSQL("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+        }
+        if (oldVersion < 6) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS git_config (
+                    project_id TEXT PRIMARY KEY NOT NULL,
+                    remote_url TEXT,
+                    branch TEXT,
+                    credential_id TEXT
+                )
+                """.trimIndent(),
+            )
+            if (!db.hasColumn("git_config", "remote_name")) {
+                db.execSQL("ALTER TABLE git_config ADD COLUMN remote_name TEXT NOT NULL DEFAULT 'origin'")
+            }
+            if (!db.hasColumn("git_config", "username")) {
+                db.execSQL("ALTER TABLE git_config ADD COLUMN username TEXT NOT NULL DEFAULT 'git'")
+            }
         }
         check(newVersion <= DATABASE_VERSION) {
             "Database version $newVersion is newer than supported version $DATABASE_VERSION"
@@ -237,8 +257,14 @@ class PocketPilotDatabase(
         )
     }
 
+    private fun SQLiteDatabase.hasColumn(table: String, column: String): Boolean =
+        rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }
+                .any { it == column }
+        }
+
     companion object {
         private const val DATABASE_NAME = "pocketpilot.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
     }
 }

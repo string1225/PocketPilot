@@ -2,7 +2,7 @@
 
 PocketPilot 是一个去中心化 Android Agent Workspace：手机保存项目、会话、Workspace、Checkpoint 和凭据引用，TypeScript Agent 通过受控 Tool 操作本地项目，并可把命令交给用户自己的 SSH 服务器。
 
-当前 `0.3.2` 已打通：
+当前 `0.3.3` 已打通：
 
 ```text
 Compose Chat
@@ -16,15 +16,15 @@ Compose Chat
 ## 当前可用
 
 - 全新安装首次启动会先进入五步欢迎引导：整体架构、模型连接测试、可选本地/Git 项目、可选 SSH 服务器和完成确认；完成后及后续启动直接进入聊天。右滑进入“项目与会话”，左滑进入“产出物”。
-- 右上角可切换项目/会话或新建会话；会话和消息持久化在 SQLite。
+- 右上角可切换项目/会话或新建会话；当前项目有明显选中态，每个项目可独立绑定一个 HTTPS Git remote 和项目专属 PAT；会话卡片紧凑显示标题与时间。
 - 左上角 PocketPilot 图标进入设置：模型、远程服务器、个性化、记忆、工具列表、插件入口、外观和中英文。
 - 模型协议默认选择 OpenAI Chat API：用户必须填写 OpenAI-compatible HTTPS Endpoint、文本模型、图片模型和 API Key（AK）。也可选择 GLM；此时隐藏 Endpoint，文本模型默认 `glm-5.3`，图片识别固定使用 `glm-5v-turbo`，AK 仍必填。保存连接前会分别验证文本和图片模型。
-- API Key、Git Token、SSH 密码/私钥使用 Android Keystore 保护的 AES-GCM 加密存储，不写进 Workspace、SQLite 明文字段、日志或 Git。
+- API Key、项目级 Git Personal access token（PAT）、SSH 密码/私钥使用 Android Keystore 保护的 AES-GCM 加密存储，不写进 Workspace、SQLite 明文字段、日志或 Git。
 - Agent Run 由 Application 级 Coordinator 管理；离开 Activity 后由前台服务继续，结束、失败或取消后发通知，点击通知回到对应项目和会话。
 - Agent Loop 不设置固定轮次或 App 级运行时长上限；模型返回 final、用户终止、审批拒绝、Provider/Tool 错误或 Android 系统终止时才结束。
 - Chat Completions 使用 SSE 原位更新同一条 Assistant 消息；消息底部显示状态与 Token usage，运行中的新消息按 Project 进入 FIFO 队列。
 - 支持中英文系统语音识别和多图片上传；图片先复制到 App 私有目录，再由受控 `image.analyze` 工具调用配置的视觉模型。
-- Workspace 八个工具、自动 Checkpoint、Diff 与 Restore。
+- Workspace 八个工具、树形文件浏览、自动 Checkpoint、Diff 与 Restore。
 - JGit：init、clone、status、diff、commit、pull、push。
 - HTTP：对公网 HTTP(S) 发起有超时和正文上限的请求；禁用重定向，拒绝 IP literal、内网/回环/链路本地/元数据地址及敏感请求头，二进制响应以 Base64 无损返回。
 - 沙箱脚本：`execute_js` 与 `execute_ts` 在一次性 Web Worker 中运行，隔离 Native Bridge、网络、文件和凭据，并限制执行时间及输入输出。
@@ -91,7 +91,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 4. 选择是否现在配置 SSH 服务器。选择“是”后填写服务器公钥的可信 `SHA256:` 指纹，并录入密码或通过系统文件选择器导入 OpenSSH/PEM 私钥；也可以选择“暂时不要”稍后配置。
 5. 在完成页检查模型、当前项目和服务器摘要，点击“开始使用”进入聊天。此时 Android 才会按系统版本请求通知权限；允许后，切出 App 的任务可在完成时通知你。
 
-引导完成状态单独持久化在本地设置中；APK 覆盖更新不会重跑引导或清空配置。升级自旧版本且已有项目的安装会直接保留原有入口。之后可点左上角 PocketPilot Logo 随时重新配置模型、Git 凭据或 SSH 服务器。
+引导完成状态单独持久化在本地设置中；APK 覆盖更新不会重跑引导或清空配置。升级自旧版本且已有项目的安装会直接保留原有入口。之后可点左上角 PocketPilot Logo 配置模型或 SSH 服务器；每个项目的 Git 仓库和 PAT 在“项目与会话”页单独管理。
 
 仓库不会附带任何默认 API Key。开发、截图和日志分享时不要使用生产凭据。
 
@@ -114,6 +114,7 @@ GitHub Actions 在 `dev` 与 `main` 上重复上述验证，另启动 API 36 模
 ## 文档
 
 - [技术规划与实施方案](docs/TECHNICAL_PLAN.md)
+- [Agent Kernel 与 pi 对照评审](docs/PI_AGENT_KERNEL_REVIEW.md)
 - [Android 模拟器、USB/无线真机接入与测试指南](docs/PHONE_TESTING.md)
 - [HTTP、沙箱脚本、插件包与 SSH 配置](docs/TOOLS_AND_PLUGINS.md)
 - [GitHub Release 与应用内更新](docs/RELEASES_AND_UPDATES.md)

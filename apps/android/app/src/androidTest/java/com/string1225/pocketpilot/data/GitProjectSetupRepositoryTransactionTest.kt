@@ -20,8 +20,9 @@ import org.junit.runner.RunWith
 class GitProjectSetupRepositoryTransactionTest {
     @Test
     fun newTokenIsEphemeralUntilCloneCheckpointAndProjectCompletion() =
-        withFixture("success") { projects, checkpoints, projectsRoot ->
+        withFixture("success") { database, projects, checkpoints, projectsRoot ->
             val credentials = RecordingCredentialStore("old-token")
+            val gitBindings = GitBindingRepository(database, projects, credentials)
             val newToken = "new-token".toCharArray()
             try {
                 val factory = GitProjectCloneClientFactory { workspace, resolver, _ ->
@@ -41,7 +42,7 @@ class GitProjectSetupRepositoryTransactionTest {
                         },
                     )
                 }
-                val setup = GitProjectSetupRepository(projects, checkpoints, credentials, factory)
+                val setup = GitProjectSetupRepository(projects, checkpoints, credentials, gitBindings, factory)
                 credentials.beforePut = {
                     val candidate = projects.list().single()
                     assertFalse(projects.hasProvisioningMarker(candidate.id))
@@ -62,8 +63,10 @@ class GitProjectSetupRepositoryTransactionTest {
                 )
 
                 projects.requireProvisioned(project.id)
-                assertEquals(listOf("get", "put"), credentials.operations)
-                assertEquals("new-token", credentials.peek(CredentialIds.DEFAULT_GIT_TOKEN))
+                assertTrue("put" in credentials.operations)
+                assertEquals("old-token", credentials.peek(CredentialIds.DEFAULT_GIT_TOKEN))
+                assertEquals("new-token", credentials.peek(CredentialIds.projectGitToken(project.id)))
+                assertEquals(project.id, gitBindings.get(project.id)?.projectId)
                 assertTrue(File(projectsRoot, "${project.id}/workspace/README.md").isFile)
             } finally {
                 newToken.fill('\u0000')
@@ -72,13 +75,15 @@ class GitProjectSetupRepositoryTransactionTest {
 
     @Test
     fun failedCloneLeavesDurableTokenAndProjectListUntouched() =
-        withFixture("failure") { projects, checkpoints, projectsRoot ->
+        withFixture("failure") { database, projects, checkpoints, projectsRoot ->
             val credentials = RecordingCredentialStore("old-token")
+            val gitBindings = GitBindingRepository(database, projects, credentials)
             var cleanupCalled = false
             val setup = GitProjectSetupRepository(
                 projects,
                 checkpoints,
                 credentials,
+                gitBindings,
                 GitProjectCloneClientFactory { workspace, _, _ ->
                     FakeCloneClient(
                         onClone = {
@@ -105,7 +110,7 @@ class GitProjectSetupRepositoryTransactionTest {
 
                 assertTrue(failure is IllegalStateException)
                 assertTrue(cleanupCalled)
-                assertEquals(emptyList<String>(), credentials.operations)
+                assertFalse("put" in credentials.operations)
                 assertEquals("old-token", credentials.peek(CredentialIds.DEFAULT_GIT_TOKEN))
                 assertTrue(projects.list().isEmpty())
                 assertTrue(projectsRoot.listFiles().orEmpty().isEmpty())
@@ -159,7 +164,7 @@ class GitProjectSetupRepositoryTransactionTest {
 
     private fun withFixture(
         label: String,
-        block: (ProjectRepository, CheckpointRepository, File) -> Unit,
+        block: (PocketPilotDatabase, ProjectRepository, CheckpointRepository, File) -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val unique = UUID.randomUUID().toString()
@@ -172,7 +177,7 @@ class GitProjectSetupRepositoryTransactionTest {
                 val projects = ProjectRepository(database, projectsRoot)
                 val checkpoints = CheckpointRepository(database, projectsRoot, projects::exists)
                 projects.checkpoints = checkpoints
-                block(projects, checkpoints, projectsRoot)
+                block(database, projects, checkpoints, projectsRoot)
             }
         } finally {
             context.deleteDatabase(databaseName)

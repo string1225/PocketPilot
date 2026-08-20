@@ -4,6 +4,7 @@ import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
 import com.string1225.pocketpilot.data.ConversationRepository
 import com.string1225.pocketpilot.data.GitProjectSetupRepository
+import com.string1225.pocketpilot.data.GitBindingRepository
 import com.string1225.pocketpilot.data.ProjectRepository
 import com.string1225.pocketpilot.data.PluginRepository
 import com.string1225.pocketpilot.data.SettingsRepository
@@ -18,6 +19,7 @@ import com.string1225.pocketpilot.model.ConversationMessage
 import com.string1225.pocketpilot.model.ConversationMessageRole
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.Project
+import com.string1225.pocketpilot.model.ProjectGitBinding
 import com.string1225.pocketpilot.model.InstalledPlugin
 import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.RemoteServerProfile
@@ -52,6 +54,7 @@ import org.json.JSONObject
 class RuntimePocketPilotService(
     private val projects: ProjectRepository,
     private val gitProjectSetup: GitProjectSetupRepository,
+    private val gitBindings: GitBindingRepository,
     private val workspace: WorkspaceRepository,
     private val checkpoints: CheckpointRepository,
     private val agentRuns: AgentRunRepository,
@@ -94,7 +97,28 @@ class RuntimePocketPilotService(
 
     override suspend fun deleteProject(projectId: String) {
         projects.delete(projectId)
+        gitBindings.deleteCredentialForProject(projectId)
         projects.ensureDefaultProject()
+    }
+
+    override fun getProjectGitBinding(projectId: String): ProjectGitBinding? = gitBindings.get(projectId)
+
+    override fun saveProjectGitBinding(
+        projectId: String,
+        remoteName: String,
+        remoteUrl: String,
+        branch: String?,
+        newToken: CharArray?,
+    ): ProjectGitBinding = pluginRuns.mutate {
+        gitBindings.save(projectId, remoteName, remoteUrl, branch, newToken = newToken)
+    }
+
+    override fun removeProjectGitBinding(projectId: String) = pluginRuns.mutate {
+        gitBindings.remove(projectId)
+    }
+
+    override fun removeProjectGitCredential(projectId: String): ProjectGitBinding? = pluginRuns.mutate {
+        gitBindings.removeCredential(projectId)
     }
 
     override fun listConversations(projectId: String?): List<Conversation> = conversations.list(projectId)
@@ -293,7 +317,7 @@ class RuntimePocketPilotService(
                     .put("provider", provider)
                     .put(
                         "systemPrompt",
-                        buildSystemPrompt(runSettings.personalization, runSettings.language),
+                        buildSystemPrompt(projectId, runSettings.personalization, runSettings.language),
                     )
                     .put("messages", history)
                     .put("toolsEnabled", runSettings.toolsEnabled)
@@ -371,6 +395,7 @@ class RuntimePocketPilotService(
     }
 
     private fun buildSystemPrompt(
+        projectId: String,
         personalization: String,
         language: AppLanguage,
     ): String = buildString {
@@ -379,6 +404,18 @@ class RuntimePocketPilotService(
                 "workspace. Use tools when evidence or changes are required. Never claim a tool " +
                 "succeeded until its result confirms success.",
         )
+        gitBindings.get(projectId)?.let { binding ->
+            append("\n\nGit repository bound to this project:")
+            append("\n- remote: ").append(binding.remoteName)
+            append("\n- HTTPS URL: ").append(binding.remoteUrl)
+            binding.branch?.let { append("\n- preferred branch: ").append(it) }
+            append("\n- Personal access token available: ")
+                .append(if (binding.hasCredential) "yes" else "no")
+            append(
+                "\nUse this exact remote for pull/push. PocketPilot will release the project token " +
+                    "only to this bound HTTPS repository and will still request user approval.",
+            )
+        }
         val configuredServers = sshServers.list()
         if (configuredServers.isNotEmpty()) {
             append("\n\nAvailable SSH servers (use ssh.execute with the configured server id):")
