@@ -186,6 +186,9 @@ class PocketPilotDatabase(
             db.execSQL("ALTER TABLE agent_runs ADD COLUMN recovery_phase TEXT")
             db.execSQL("ALTER TABLE agent_runs ADD COLUMN resume_payload TEXT")
         }
+        if (oldVersion < 8 && db.hasTable("messages") && !db.hasColumn("messages", "cached_prompt_tokens")) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN cached_prompt_tokens INTEGER")
+        }
         check(newVersion <= DATABASE_VERSION) {
             "Database version $newVersion is newer than supported version $DATABASE_VERSION"
         }
@@ -219,6 +222,7 @@ class PocketPilotDatabase(
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
                 total_tokens INTEGER,
+                cached_prompt_tokens INTEGER,
                 attachments_json TEXT NOT NULL DEFAULT '[]',
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
@@ -277,7 +281,7 @@ class PocketPilotDatabase(
     ).use { it.moveToFirst() }
 
     companion object {
-        private const val DATABASE_NAME = "pocketpilot.db"
-        private const val DATABASE_VERSION = 7
+        const val DATABASE_NAME = "pocketpilot.db"
+        const val DATABASE_VERSION = 8
     }
 }

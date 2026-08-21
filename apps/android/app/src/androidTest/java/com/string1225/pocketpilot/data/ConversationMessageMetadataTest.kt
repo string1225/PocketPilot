@@ -55,6 +55,7 @@ class ConversationMessageMetadataTest {
                         "prompt_tokens",
                         "completion_tokens",
                         "total_tokens",
+                        "cached_prompt_tokens",
                         "attachments_json",
                     ),
                 ),
@@ -109,7 +110,7 @@ class ConversationMessageMetadataTest {
                 content = "Finished",
                 messageId = messageId,
                 status = "completed",
-                tokenUsage = TokenUsage(10, 4, 14),
+                tokenUsage = TokenUsage(10, 4, 14, 7),
                 attachments = listOf(attachment),
             )
 
@@ -117,7 +118,7 @@ class ConversationMessageMetadataTest {
             assertEquals(1, messages.size)
             assertEquals("Finished", messages.single().content)
             assertEquals("completed", messages.single().status)
-            assertEquals(TokenUsage(10, 4, 14), messages.single().tokenUsage)
+            assertEquals(TokenUsage(10, 4, 14, 7), messages.single().tokenUsage)
             assertEquals(listOf(attachment), messages.single().attachments)
             assertNotNull(messages.single().attachments.single().previewUri)
         } finally {

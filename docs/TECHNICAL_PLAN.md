@@ -11,7 +11,8 @@ PocketPilot 是“手机上的 Agent 控制中心”，不是把完整桌面开�
 - TypeScript Agent Loop 与 Native JSON Bridge。
 - 默认 OpenAI-compatible Chat Completions 与可选 GLM 预设；后端保留 Responses 兼容能力。
 - Workspace、Checkpoint、JGit 和 SSHJ 真实工具。
-- Native 一次性审批、Android Keystore 凭据、后台前台服务和结果通知。
+- Native 审批（支持当前 Run 内记住同工具授权）、Android Keystore 凭据、后台前台服务和结果通知。
+- 可配置 Runtime 并发与轮次、Token/cache usage、全量非秘密 ZIP 备份与恢复。
 - 离线 Provider、自动测试、模拟器/USB/无线真机指南。
 
 本版暂不实现：账号或中心云、远程文件系统、目录挂载同步、MCP/插件安装市场、跨进程重启恢复运行中的模型请求。
@@ -41,7 +42,7 @@ Native dispatch chain
 Android Keystore / JGit / SSHJ / private Workspace
 ```
 
-ViewModel 只负责 UI 状态；Run 的唯一 owner 是 Application 级 Coordinator。这样 Activity 因旋转、切后台或系统重建而消失时，不会连带取消任务。每个 Project 同时最多一个活动 Run，避免 Agent 与另一个会话并发改同一 Workspace。
+ViewModel 只负责 UI 状态；Run 的唯一 owner 是 Application 级 Coordinator。这样 Activity 因旋转、切后台或系统重建而消失时，不会连带取消任务。默认最多同时运行 3 个会话，用户可在 Runtime 设置调整；同一会话仍只允许一个活动 Run。同一 Project 的 Workspace/Git 工具由项目级 Gate 串行化，避免并发写入冲突。
 
 ## 3. UI 与状态模型
 
@@ -58,7 +59,7 @@ Projects & conversations <- Chat -> Artifacts
 - 未保存编辑在切项目、Restore、启动 Agent 等冲突动作前阻止覆盖。
 - 通知 deep link 同时携带 projectId/conversationId，冷启动和已有 Activity 都会校验关系后导航。
 
-SQLite v6 主要表：
+SQLite v8 主要表：
 
 ```text
 projects -> conversations -> messages
@@ -146,7 +147,7 @@ Android 由 JGit 实现：init/clone/status/diff/commit/pull/push。Repository �
 SSH 仅是 `ssh.execute`，不是远程 Workspace。配置包含 server id、host、port、username、认证方式、固定 `SHA256:` 主机公钥指纹、credential id 和说明。配置 UI 先用无凭据握手扫描公钥候选，只有用户声明已通过服务器控制台或管理员可信渠道核对后才允许保存；扫描值本身不被当作可信根。
 
 - 使用 SSHJ 严格 HostKeyVerifier；不接受 TOFU/Promiscuous verifier。
-- 密码/私钥只证明“客户端是谁”，主机公钥指纹证明“连接到的服务器是谁”；省略验证会让中间人有机会截获密码或代理命令。后续可增加连接前扫描公钥、展示算法与 SHA-256、由用户在可信渠道核对后一次确认的引导，但不能静默信任首次看到的 key。
+- 密码/私钥只证明“客户端是谁”，主机公钥指纹证明“连接到的服务器是谁”；省略验证会让中间人有机会截获密码或代理命令。当前配置流程会先扫描并展示主机公钥算法与 SHA-256 指纹，再要求用户通过可信渠道核对后确认；不会静默信任首次看到的 key。
 - `apps/android/sshj-android` 对 SSHJ 0.40.0 做可复现、哈希固定的最小 Android Ed25519 兼容构建；只让 Ed25519 使用未注册的 bundled Provider 实例，不新增、替换或重排进程全局 JCA Provider。
 - 支持密码和未加密 PEM/OpenSSH 私钥；秘密只在一次连接期间短暂解密并清零可擦除缓冲。加密私钥 passphrase 是后续扩展。
 - 命令在进入审批 UI 前做类型、长度、NUL/控制符、timeout 和输出预算校验。
@@ -165,13 +166,13 @@ Android manifest 在平台层允许 cleartext，唯一目的是让上述显式 o
 
 ### 审批
 
-审批框按操作类型展示 Workspace 目标、Git remote/branch/credential release 或 SSH server/fingerprint/command。批准只绑定一个 call id；拒绝会返回结构化失败并安全收敛当前 Run。
+审批框按操作类型展示 Workspace 目标、Git remote/branch/credential release 或 SSH server/fingerprint/command。默认批准只绑定一个 call id；用户可额外勾选“本次会话后续相同工具调用默认允许”，该记忆按 `runId + toolName` 隔离，Run 结束或取消即清除。拒绝会返回结构化失败并安全收敛当前 Run。
 
 ## 7. 后台与通知
 
 `AgentRunCoordinator` 在用户点击发送的可见 Activity 路径立即启动 `dataSync` foreground service，然后启动 Application scope Run。它负责：
 
-- 原子限制每 Project 一个活动 Run。
+- 按用户设置原子限制全局并发会话数（默认 3），并保持同一会话只有一个活动 Run。
 - 串行持久化 transcript。
 - 转发取消与审批。
 - 发布活动 Run StateFlow，供重建后的 UI 合并。
@@ -183,7 +184,13 @@ Android manifest 在平台层允许 cleartext，唯一目的是让上述显式 o
 
 普通切出 App、旋转和 Activity 重建不会取消 Run；用户 force-stop、设备重启或进程被彻底杀死会中断网络请求。本版重启后把残留 RUNNING 记录标记为 interrupted，不尝试恢复模型 TCP 请求。
 
-## 8. 验收与 CI
+## 8. 备份与恢复
+
+设置页通过 Android Storage Access Framework 导出/导入 ZIP。备份包含当前 SQLite 状态、项目目录（包括 Git 工作区）、附件、插件源码、Checkpoint 和会话历史，并为每个条目记录大小与 SHA-256。导入限制条目数、单文件和总展开大小，拒绝绝对路径、`..`、重复路径、符号链接和清单不一致；SQLite 先只读校验，再逐表复制到当前版本创建的干净数据库，避免把任意 schema、trigger 或凭据表直接激活。
+
+PocketPilot 凭据库中的 AK、Personal access token、SSH 密码和私钥不导出；用户自行写入项目文件的敏感内容仍属于项目备份的一部分。导入会清除现有和备份所引用的凭据，并把 Git credential reference 置空，因此恢复后必须由用户重新录入。恢复仅在没有活动或排队 Run 时执行，并在数据库/文件树替换失败时回滚原状态。
+
+## 9. 验收与 CI
 
 每次提交必须通过：
 
@@ -213,7 +220,7 @@ Tag `v<versionName>` 另触发 Release workflow。Workflow 只接受已经位于
 
 升级不执行数据库重建、项目导入或凭据迁移；相同 `applicationId` 与签名下的 Android package update 会保留 App 私有数据。发布密钥不可更换或提交到仓库。详见 [发布与应用内更新](RELEASES_AND_UPDATES.md)。
 
-## 9. 后续路线
+## 10. 后续路线
 
 1. 跨进程重启恢复运行中的模型请求；当前版本已支持 Chat Completions SSE 增量显示、Token usage 和进程内 FIFO 消息队列。
 2. Checkpoint 内容寻址、BLOB/大文件策略、压缩和保留策略。
@@ -222,7 +229,7 @@ Tag `v<versionName>` 另触发 Release workflow。Workflow 只接受已经位于
 5. Skills、MCP 和签名插件；默认最小权限并支持逐插件禁用。
 6. Desktop/Web 客户端复用 Agent Core、Tool contract 和 Project model。
 
-## 10. Git 交付约定
+## 11. Git 交付约定
 
 - 日常开发固定在 `dev`，跟踪 `origin/dev`。
 - 每轮完成后运行验证、只 stage 预期文件、commit 并 push `origin/dev`。

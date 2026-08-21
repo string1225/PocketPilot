@@ -466,6 +466,7 @@ private fun MessageFooter(
     language: AppLanguage,
 ) {
     val usage = tokenUsage?.formatted()
+    val cacheRate = tokenUsage?.cacheRateFormatted(language)
     Row(
         modifier = Modifier.padding(top = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -490,6 +491,14 @@ private fun MessageFooter(
             Text("·", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             Text(
                 usage,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (cacheRate != null) {
+            Text("·", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            Text(
+                cacheRate,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -638,6 +647,13 @@ private fun TokenUsage.formatted(): String? {
     }
     if (parts.isNotEmpty()) return "${parts.joinToString(" ")} tokens"
     return totalTokens?.let { "$it tokens" }
+}
+
+private fun TokenUsage.cacheRateFormatted(language: AppLanguage): String? {
+    val prompt = promptTokens?.takeIf { it > 0 } ?: return null
+    val cached = cachedPromptTokens ?: return null
+    val percent = (cached.toDouble() * 100.0 / prompt.toDouble()).coerceIn(0.0, 100.0)
+    return ppText(language, "缓存 ${"%.1f".format(percent)}%", "Cache ${"%.1f".format(percent)}%")
 }
 
 private fun decodeAttachmentThumbnail(context: Context, uri: Uri): ImageBitmap? = runCatching {

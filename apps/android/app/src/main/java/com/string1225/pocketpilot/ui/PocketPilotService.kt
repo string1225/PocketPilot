@@ -148,7 +148,7 @@ interface PocketPilotService {
         task: String,
         attachments: List<ChatImageAttachment> = emptyList(),
     ): Boolean
-    fun resolveApproval(requestId: String, approved: Boolean): Boolean
+    fun resolveApproval(requestId: String, approved: Boolean, rememberForRun: Boolean = false): Boolean
 }
 
 /**
@@ -440,7 +440,11 @@ class OfflinePocketPilotService(
 
     override fun listRecoverableAgentRuns(): List<AgentRunResume> = emptyList()
 
-    override fun resolveApproval(requestId: String, approved: Boolean): Boolean = false
+    override fun resolveApproval(
+        requestId: String,
+        approved: Boolean,
+        rememberForRun: Boolean,
+    ): Boolean = false
 
     private fun timeline(kind: TimelineItemKind, title: String, body: String): TimelineItem = TimelineItem(
         id = UUID.randomUUID().toString(),

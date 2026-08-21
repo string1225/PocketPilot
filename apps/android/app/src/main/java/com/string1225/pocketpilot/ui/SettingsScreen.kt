@@ -1,6 +1,9 @@
 package com.string1225.pocketpilot.ui
 
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -71,6 +74,7 @@ import com.string1225.pocketpilot.model.InstalledPlugin
 import com.string1225.pocketpilot.model.PluginInstallPreview
 import com.string1225.pocketpilot.model.PocketPilotSettings
 import com.string1225.pocketpilot.model.RemoteServerProfile
+import com.string1225.pocketpilot.model.RuntimeSettingsPolicy
 import com.string1225.pocketpilot.model.SshAuthType
 import com.string1225.pocketpilot.model.SshHostKeyCandidate
 import com.string1225.pocketpilot.model.ThemePreference
@@ -78,6 +82,8 @@ import com.string1225.pocketpilot.update.UpdatePhase
 import com.string1225.pocketpilot.update.UpdateState
 import java.util.Locale
 import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.Date
 
 private enum class EditableSetting {
     PERSONALIZATION,
@@ -99,6 +105,7 @@ fun SettingsScreen(
     sshHostKeyScanError: String? = null,
     plugins: List<InstalledPlugin>,
     appUpdate: UpdateState,
+    backupInProgress: Boolean = false,
     onSettingsChange: (PocketPilotSettings) -> Unit,
     onSaveLlmConnection: (PocketPilotSettings, String?) -> Unit,
     onClearLlmConnectionTestResult: () -> Unit,
@@ -117,6 +124,8 @@ fun SettingsScreen(
     onDownloadAndInstallAppUpdate: () -> Unit,
     onInstallAppUpdate: () -> Unit,
     onOpenUnknownSourcesSettings: () -> Unit,
+    onExportBackup: (Uri) -> Unit = {},
+    onImportBackup: (Uri) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val language = settings.language
@@ -126,8 +135,17 @@ fun SettingsScreen(
     var showModelSettings by rememberSaveable { mutableStateOf(false) }
     var showRemoteServers by rememberSaveable { mutableStateOf(false) }
     var showTools by rememberSaveable { mutableStateOf(false) }
+    var showRuntime by rememberSaveable { mutableStateOf(false) }
     var showPlugins by rememberSaveable { mutableStateOf(false) }
     var showAppUpdate by rememberSaveable { mutableStateOf(false) }
+    var showBackup by rememberSaveable { mutableStateOf(false) }
+    var pendingRestore by remember { mutableStateOf<Uri?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri -> uri?.let(onExportBackup) }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> pendingRestore = uri }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -168,6 +186,18 @@ fun SettingsScreen(
                         onClearLlmConnectionTestResult()
                         showModelSettings = true
                     },
+                )
+            }
+            item {
+                SettingsValueRow(
+                    icon = Icons.Default.Settings,
+                    title = ppText(language, "Runtime", "Runtime"),
+                    value = ppText(
+                        language,
+                        "${settings.maxConcurrentSessions} 个并发会话 · ${settings.maxConcurrentTools} 个并发工具",
+                        "${settings.maxConcurrentSessions} sessions · ${settings.maxConcurrentTools} tools",
+                    ),
+                    onClick = { showRuntime = true },
                 )
             }
             item {
@@ -261,6 +291,18 @@ fun SettingsScreen(
                 )
             }
             item {
+                SettingsValueRow(
+                    icon = Icons.Default.Settings,
+                    title = ppText(language, "备份与恢复", "Backup & restore"),
+                    value = ppText(
+                        language,
+                        "设置、项目文件、插件和会话历史",
+                        "Settings, project files, plugins, and chat history",
+                    ),
+                    onClick = { showBackup = true },
+                )
+            }
+            item {
                 ListItem(
                     headlineContent = { Text("PocketPilot") },
                     supportingContent = {
@@ -341,6 +383,18 @@ fun SettingsScreen(
         )
     }
 
+    if (showRuntime) {
+        RuntimeSettingsDialog(
+            language = language,
+            settings = settings,
+            onSave = { updated ->
+                showRuntime = false
+                onSettingsChange(updated)
+            },
+            onDismiss = { showRuntime = false },
+        )
+    }
+
     if (showPlugins) {
         PluginManagerDialog(
             language = language,
@@ -390,6 +444,50 @@ fun SettingsScreen(
             onInstall = onInstallAppUpdate,
             onOpenUnknownSourcesSettings = onOpenUnknownSourcesSettings,
             onDismiss = { showAppUpdate = false },
+        )
+    }
+
+    if (showBackup) {
+        BackupRestoreDialog(
+            language = language,
+            inProgress = backupInProgress,
+            onExport = {
+                val timestamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                exportLauncher.launch("pocketpilot-backup-$timestamp.zip")
+            },
+            onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
+            onDismiss = { if (!backupInProgress) showBackup = false },
+        )
+    }
+
+    pendingRestore?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { if (!backupInProgress) pendingRestore = null },
+            title = { Text(ppText(language, "恢复这份备份？", "Restore this backup?")) },
+            text = {
+                Text(
+                    ppText(
+                        language,
+                        "现有设置、项目文件、插件和会话历史会被备份内容替换。PocketPilot 凭据不会从 ZIP 导入，恢复后需要重新填写；请只导入你信任的备份。",
+                        "Existing settings, project files, plugins, and chat history will be replaced. PocketPilot credentials are never imported and must be entered again. Import only a backup you trust.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !backupInProgress,
+                    onClick = {
+                        pendingRestore = null
+                        onImportBackup(uri)
+                    },
+                ) { Text(ppText(language, "恢复", "Restore")) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !backupInProgress,
+                    onClick = { pendingRestore = null },
+                ) { Text(ppText(language, "取消", "Cancel")) }
+            },
         )
     }
 }
@@ -1315,23 +1413,6 @@ internal fun RemoteServerEditorDialog(
                     }
                 }
                 item {
-                    Row {
-                        SshAuthType.entries.forEach { choice ->
-                            val selectChoice = {
-                                if (authType != choice) {
-                                    secret = ""
-                                    credentialImportError = null
-                                    authType = choice
-                                }
-                            }
-                            TextButton(onClick = selectChoice) {
-                                RadioButton(selected = authType == choice, onClick = selectChoice)
-                                Text(choice.label(language))
-                            }
-                        }
-                    }
-                }
-                item {
                     Button(
                         onClick = {
                             fingerprint = ""
@@ -1358,26 +1439,28 @@ internal fun RemoteServerEditorDialog(
                         )
                     }
                 }
-                item {
-                    OutlinedTextField(
-                        value = fingerprint,
-                        onValueChange = {},
-                        label = { Text("Host key SHA256 fingerprint") },
-                        supportingText = { Text("SHA256:…") },
-                        singleLine = true,
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                item {
-                    Text(
-                        ppText(
-                            language,
-                            "请从服务器管理员或服务器控制台核对主机指纹。可在服务器执行：ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub。不要仅信任首次连接弹出的指纹。",
-                            "Verify the host fingerprint with the server administrator or console. On the server, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Do not trust a fingerprint shown only by the first connection attempt.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                if (fingerprint.startsWith("SHA256:")) {
+                    item {
+                        OutlinedTextField(
+                            value = fingerprint,
+                            onValueChange = {},
+                            label = { Text("Host key SHA256 fingerprint") },
+                            supportingText = { Text("SHA256:…") },
+                            singleLine = true,
+                            readOnly = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    item {
+                        Text(
+                            ppText(
+                                language,
+                                "请从服务器管理员或服务器控制台核对主机指纹。可在服务器执行：ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub。不要仅信任首次连接弹出的指纹。",
+                                "Verify the host fingerprint with the server administrator or console. On the server, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Do not trust a fingerprint shown only by the first connection attempt.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
                 matchingCandidate?.let { candidate ->
                     item {
@@ -1424,7 +1507,7 @@ internal fun RemoteServerEditorDialog(
                 scanError?.let { error ->
                     item { Text(error, color = MaterialTheme.colorScheme.error) }
                 }
-                item {
+                if (fingerprint.startsWith("SHA256:")) item {
                     Text(
                         ppText(
                             language,
@@ -1434,7 +1517,24 @@ internal fun RemoteServerEditorDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (authType == SshAuthType.PASSWORD) {
+                if (fingerprint.startsWith("SHA256:")) item {
+                    Row {
+                        SshAuthType.entries.forEach { choice ->
+                            val selectChoice = {
+                                if (authType != choice) {
+                                    secret = ""
+                                    credentialImportError = null
+                                    authType = choice
+                                }
+                            }
+                            TextButton(onClick = selectChoice) {
+                                RadioButton(selected = authType == choice, onClick = selectChoice)
+                                Text(choice.label(language))
+                            }
+                        }
+                    }
+                }
+                if (fingerprint.startsWith("SHA256:") && authType == SshAuthType.PASSWORD) {
                     item {
                         OutlinedTextField(
                             value = secret,
@@ -1458,7 +1558,7 @@ internal fun RemoteServerEditorDialog(
                         )
                     }
                 }
-                if (authType == SshAuthType.PRIVATE_KEY) {
+                if (fingerprint.startsWith("SHA256:") && authType == SshAuthType.PRIVATE_KEY) {
                     item {
                         SshPrivateKeyImportButton(
                             language = language,
@@ -1492,7 +1592,7 @@ internal fun RemoteServerEditorDialog(
                             )
                         }
                     }
-                } else {
+                } else if (fingerprint.startsWith("SHA256:")) {
                     item {
                         Text(
                             ppText(
@@ -1509,7 +1609,7 @@ internal fun RemoteServerEditorDialog(
                         Text(message, color = MaterialTheme.colorScheme.error)
                     }
                 }
-                item {
+                if (fingerprint.startsWith("SHA256:")) item {
                     OutlinedTextField(
                         value = description,
                         onValueChange = { description = it.take(4_096) },
@@ -1544,6 +1644,144 @@ internal fun RemoteServerEditorDialog(
         },
         dismissButton = {
             TextButton(onClick = clearAndDismiss) { Text(ppText(language, "取消", "Cancel")) }
+        },
+    )
+}
+
+@Composable
+private fun BackupRestoreDialog(
+    language: AppLanguage,
+    inProgress: Boolean,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!inProgress) onDismiss() },
+        title = { Text(ppText(language, "备份与恢复", "Backup & restore")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    ppText(
+                        language,
+                        "ZIP 包包含应用设置、项目文件（含 Git 工作区）、Checkpoint、插件、附件和会话历史。",
+                        "The ZIP contains app settings, project files (including Git workspaces), checkpoints, plugins, attachments, and chat history.",
+                    ),
+                )
+                Text(
+                    ppText(
+                        language,
+                        "PocketPilot 凭据库中的 AK、Personal access token、SSH 密码和私钥不会导出，恢复后需重新填写。项目文件中由你自行保存的敏感内容仍会进入 ZIP，请妥善保管备份。",
+                        "AKs, Personal access tokens, SSH passwords, and private keys in PocketPilot's credential store are not exported and must be re-entered. Secrets you placed in project files are still included, so protect the ZIP.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (inProgress) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                        Text(ppText(language, "处理中…", "Working…"))
+                    }
+                } else {
+                    Button(onClick = onExport, modifier = Modifier.fillMaxWidth()) {
+                        Text(ppText(language, "导出 ZIP 备份", "Export ZIP backup"))
+                    }
+                    Button(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+                        Text(ppText(language, "从 ZIP 恢复", "Restore from ZIP"))
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(enabled = !inProgress, onClick = onDismiss) {
+                Text(ppText(language, "关闭", "Close"))
+            }
+        },
+    )
+}
+
+@Composable
+private fun RuntimeSettingsDialog(
+    language: AppLanguage,
+    settings: PocketPilotSettings,
+    onSave: (PocketPilotSettings) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var sessions by rememberSaveable { mutableStateOf(settings.maxConcurrentSessions.toString()) }
+    var tools by rememberSaveable { mutableStateOf(settings.maxConcurrentTools.toString()) }
+    var turns by rememberSaveable { mutableStateOf(settings.maxAgentTurns.toString()) }
+    val sessionCount = sessions.toIntOrNull()
+    val toolCount = tools.toIntOrNull()
+    val turnCount = turns.toIntOrNull()
+    val valid = (sessionCount ?: 0) in 1..RuntimeSettingsPolicy.MAX_CONCURRENT_SESSIONS &&
+        (toolCount ?: 0) in 1..RuntimeSettingsPolicy.MAX_CONCURRENT_TOOLS &&
+        (turnCount ?: -1) in 0..RuntimeSettingsPolicy.MAX_TURNS
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(ppText(language, "Runtime 设置", "Runtime settings")) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    ppText(
+                        language,
+                        "并发会话可在不同会话中同时运行；同一项目的文件和 Git 写操作仍会自动串行，避免冲突。",
+                        "Concurrent sessions may run in different chats. File and Git writes in the same project remain serialized to prevent conflicts.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = sessions,
+                    onValueChange = { sessions = it.filter(Char::isDigit).take(2) },
+                    label = { Text(ppText(language, "并发会话", "Concurrent sessions")) },
+                    supportingText = { Text("1–${RuntimeSettingsPolicy.MAX_CONCURRENT_SESSIONS}") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = tools,
+                    onValueChange = { tools = it.filter(Char::isDigit).take(2) },
+                    label = { Text(ppText(language, "每个会话的并发工具", "Concurrent tools per session")) },
+                    supportingText = { Text("1–${RuntimeSettingsPolicy.MAX_CONCURRENT_TOOLS}") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = turns,
+                    onValueChange = { turns = it.filter(Char::isDigit).take(4) },
+                    label = { Text(ppText(language, "最大 Agent 轮次", "Maximum Agent turns")) },
+                    supportingText = {
+                        Text(ppText(language, "0 表示不限制；上限 ${RuntimeSettingsPolicy.MAX_TURNS}", "0 means unlimited; maximum ${RuntimeSettingsPolicy.MAX_TURNS}"))
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = valid,
+                onClick = {
+                    onSave(
+                        settings.copy(
+                            maxConcurrentSessions = checkNotNull(sessionCount),
+                            maxConcurrentTools = checkNotNull(toolCount),
+                            maxAgentTurns = checkNotNull(turnCount),
+                        ),
+                    )
+                },
+            ) { Text(ppText(language, "保存", "Save")) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(ppText(language, "取消", "Cancel")) }
         },
     )
 }

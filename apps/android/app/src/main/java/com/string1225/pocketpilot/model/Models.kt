@@ -140,6 +140,7 @@ data class TokenUsage(
     val promptTokens: Long? = null,
     val completionTokens: Long? = null,
     val totalTokens: Long? = null,
+    val cachedPromptTokens: Long? = null,
 )
 
 /**
@@ -369,9 +370,34 @@ data class PocketPilotSettings(
     val personalization: String = "",
     val memoryEnabled: Boolean = true,
     val toolsEnabled: Boolean = true,
+    val maxConcurrentSessions: Int = 3,
+    val maxConcurrentTools: Int = 4,
+    /** Zero means unlimited. */
+    val maxAgentTurns: Int = 0,
     val theme: ThemePreference = ThemePreference.SYSTEM,
     val language: AppLanguage = AppLanguage.CHINESE,
 )
+
+object RuntimeSettingsPolicy {
+    const val DEFAULT_CONCURRENT_SESSIONS = 3
+    const val DEFAULT_CONCURRENT_TOOLS = 4
+    const val DEFAULT_MAX_TURNS = 0
+    const val MAX_CONCURRENT_SESSIONS = 8
+    const val MAX_CONCURRENT_TOOLS = 8
+    const val MAX_TURNS = 1_000
+
+    fun requireValid(settings: PocketPilotSettings) {
+        require(settings.maxConcurrentSessions in 1..MAX_CONCURRENT_SESSIONS) {
+            "Concurrent sessions must be between 1 and $MAX_CONCURRENT_SESSIONS"
+        }
+        require(settings.maxConcurrentTools in 1..MAX_CONCURRENT_TOOLS) {
+            "Concurrent tools must be between 1 and $MAX_CONCURRENT_TOOLS"
+        }
+        require(settings.maxAgentTurns in 0..MAX_TURNS) {
+            "Maximum turns must be zero (unlimited) or at most $MAX_TURNS"
+        }
+    }
+}
 
 enum class PluginToolRisk(val value: String) {
     READ("read"),

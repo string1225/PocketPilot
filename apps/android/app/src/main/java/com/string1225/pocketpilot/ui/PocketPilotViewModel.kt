@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.string1225.pocketpilot.background.AgentRunCoordinator
 import com.string1225.pocketpilot.background.CoordinatedAgentRun
 import com.string1225.pocketpilot.background.PendingAgentTask
+import com.string1225.pocketpilot.backup.PocketPilotBackupManager
 import com.string1225.pocketpilot.model.AgentRunStatus
 import com.string1225.pocketpilot.model.AppLanguage
 import com.string1225.pocketpilot.model.Checkpoint
@@ -99,6 +100,7 @@ data class PocketPilotUiState(
     val plugins: List<InstalledPlugin> = emptyList(),
     val appUpdate: UpdateState,
     val confirmDeepLinkDiscard: Boolean = false,
+    val backupInProgress: Boolean = false,
 ) {
     val selectedProject: Project?
         get() = projects.firstOrNull { it.id == selectedProjectId }
@@ -115,6 +117,7 @@ class PocketPilotViewModel(
     private val coordinator: AgentRunCoordinator,
     private val attachmentImporter: ChatImageAttachmentImporter,
     private val updateManager: GitHubReleaseUpdateManager,
+    private val backupManager: PocketPilotBackupManager,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(
         PocketPilotUiState(
@@ -141,6 +144,7 @@ class PocketPilotViewModel(
     private var onboardingProjectSetupJob: Job? = null
     private var sshHostKeyScanJob: Job? = null
     private var appUpdateOperationJob: Job? = null
+    private var backupOperationJob: Job? = null
     private var lastObservedUpdatePhase = updateManager.state.value.phase
     private var notifiedAvailableVersion: String? = null
 
@@ -227,6 +231,7 @@ class PocketPilotViewModel(
                     runtimeAvailable = service.runtimeAvailable,
                 )
             }
+            coordinator.updateRuntimeSettings(snapshot.settings)
             initialized = true
             val resumedRuns = withContext(Dispatchers.IO) {
                 coordinator.resumeRecoverableRuns()
@@ -1068,9 +1073,9 @@ class PocketPilotViewModel(
         }
     }
 
-    fun resolveApproval(approved: Boolean) {
+    fun resolveApproval(approved: Boolean, rememberForRun: Boolean = false) {
         val request = mutableState.value.pendingApproval ?: return
-        if (!coordinator.resolveApproval(request.id, approved)) {
+        if (!coordinator.resolveApproval(request.id, approved, rememberForRun)) {
             postNotice(localized("该审批请求已经失效", "This approval request has expired"), isError = true)
         }
     }
@@ -1094,6 +1099,7 @@ class PocketPilotViewModel(
                         service.saveSettings(mutableState.value.settings)
                     }
                 }
+                coordinator.updateRuntimeSettings(mutableState.value.settings)
             } catch (error: Throwable) {
                 mutableState.update { current ->
                     if (current.settings == settings) current.copy(settings = previous) else current
@@ -1101,6 +1107,77 @@ class PocketPilotViewModel(
                 postNotice(error.displayMessage(), isError = true)
             }
         }
+    }
+
+    fun exportBackup(uri: Uri) = launchBackupOperation {
+        val result = backupManager.exportTo(uri)
+        postNotice(
+            localized(
+                "备份已导出：${result.projectCount} 个项目，${result.fileCount} 个文件",
+                "Backup exported: ${result.projectCount} project(s), ${result.fileCount} file(s)",
+            ),
+        )
+    }
+
+    fun importBackup(uri: Uri) = launchBackupOperation {
+        val result = backupManager.importFrom(uri)
+        observedTerminalRunIds.clear()
+        initialized = false
+        mutableState.update { current ->
+            PocketPilotUiState(
+                loading = true,
+                offlineDemo = service.isOfflineDemo,
+                runtimeAvailable = service.runtimeAvailable,
+                appUpdate = current.appUpdate,
+                backupInProgress = true,
+            )
+        }
+        initialize()
+        postNotice(
+            localized(
+                "备份已恢复：${result.projectCount} 个项目；AK、PAT 和 SSH 凭据需要重新填写",
+                "Backup restored: ${result.projectCount} project(s). Re-enter AKs, PATs, and SSH credentials.",
+            ),
+        )
+    }
+
+    private fun launchBackupOperation(block: suspend () -> Unit) {
+        if (backupOperationJob?.isActive == true) return
+        if (mutableState.value.editorDirty) {
+            postNotice(
+                localized(
+                    "请先保存或放弃编辑器中的修改，再备份或恢复",
+                    "Save or discard editor changes before backup or restore",
+                ),
+                isError = true,
+            )
+            return
+        }
+        if (coordinator.hasActiveRuns() || coordinator.pendingTasks.value.isNotEmpty()) {
+            postNotice(
+                localized(
+                    "请先停止所有运行中或排队中的会话，再备份或恢复",
+                    "Stop all running or queued sessions before backup or restore",
+                ),
+                isError = true,
+            )
+            return
+        }
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            mutableState.update { it.copy(backupInProgress = true) }
+            try {
+                withContext(Dispatchers.IO) { block() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                postNotice(error.displayMessage(), isError = true)
+            } finally {
+                mutableState.update { it.copy(backupInProgress = false) }
+            }
+        }
+        backupOperationJob = job
+        job.invokeOnCompletion { if (backupOperationJob === job) backupOperationJob = null }
+        job.start()
     }
 
     fun setTheme(theme: ThemePreference) = updateSettings(mutableState.value.settings.copy(theme = theme))
@@ -1622,11 +1699,18 @@ class PocketPilotViewModel(
         private val coordinator: AgentRunCoordinator,
         private val attachmentImporter: ChatImageAttachmentImporter,
         private val updateManager: GitHubReleaseUpdateManager,
+        private val backupManager: PocketPilotBackupManager,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(PocketPilotViewModel::class.java))
-            return PocketPilotViewModel(service, coordinator, attachmentImporter, updateManager) as T
+            return PocketPilotViewModel(
+                service,
+                coordinator,
+                attachmentImporter,
+                updateManager,
+                backupManager,
+            ) as T
         }
     }
 }

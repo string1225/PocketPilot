@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -149,6 +150,7 @@ fun PocketPilotApp(
                 sshHostKeyScanError = state.sshHostKeyScanError,
                 plugins = state.plugins,
                 appUpdate = state.appUpdate,
+                backupInProgress = state.backupInProgress,
                 onSettingsChange = viewModel::updateSettings,
                 onSaveLlmConnection = viewModel::saveLlmConnection,
                 onClearLlmConnectionTestResult = viewModel::clearLlmConnectionTestResult,
@@ -167,6 +169,8 @@ fun PocketPilotApp(
                 onDownloadAndInstallAppUpdate = viewModel::downloadAndInstallAppUpdate,
                 onInstallAppUpdate = viewModel::installAppUpdate,
                 onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
+                onExportBackup = viewModel::exportBackup,
+                onImportBackup = viewModel::importBackup,
                 onBack = { showSettings = false },
             )
         } else {
@@ -323,6 +327,7 @@ fun PocketPilotApp(
         }
 
         state.pendingApproval?.let { approval ->
+            var rememberForRun by remember(approval.id) { mutableStateOf(false) }
             AlertDialog(
                 onDismissRequest = { viewModel.resolveApproval(false) },
                 title = { Text(approval.title) },
@@ -341,18 +346,24 @@ fun PocketPilotApp(
                             fontWeight = FontWeight.SemiBold,
                             fontFamily = FontFamily.Monospace,
                         )
-                        Text(
-                            ppText(
-                                language,
-                                "仅允许这一次调用；拒绝后 Agent Run 会安全停止。",
-                                "Approval applies once; rejecting safely stops the Agent run.",
-                            ),
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = rememberForRun,
+                                onCheckedChange = { rememberForRun = it },
+                            )
+                            Text(
+                                ppText(
+                                    language,
+                                    "本次会话后续相同工具调用默认允许",
+                                    "Automatically allow later calls to this tool in this run",
+                                ),
+                            )
+                        }
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { viewModel.resolveApproval(true) }) {
-                        Text(ppText(language, "允许一次", "Allow once"))
+                    TextButton(onClick = { viewModel.resolveApproval(true, rememberForRun) }) {
+                        Text(ppText(language, "允许", "Allow"))
                     }
                 },
                 dismissButton = {
@@ -754,8 +765,8 @@ private fun ProjectGitBindingDialog(
                 Text(
                     ppText(
                         language,
-                        "配置只属于“${project.name}”。本地 Workspace 路径由 PocketPilot 管理，这里的路径应填写 HTTPS 仓库 URL。",
-                        "This configuration belongs only to “${project.name}”. PocketPilot manages the local Workspace path; enter the HTTPS repository URL here.",
+                        "配置只属于“${project.name}”。本地项目文件夹由 PocketPilot 管理，这里填写对应的 Git 仓库地址。",
+                        "This configuration belongs only to “${project.name}”. PocketPilot manages the local project folder; enter its Git repository URL here.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -772,7 +783,7 @@ private fun ProjectGitBindingDialog(
                 OutlinedTextField(
                     value = remoteUrl,
                     onValueChange = { remoteUrl = it.take(4_096) },
-                    label = { Text(ppText(language, "仓库路径（HTTPS URL）", "Repository path (HTTPS URL)")) },
+                    label = { Text(ppText(language, "Git 仓库地址", "Git repository URL")) },
                     placeholder = { Text("https://github.com/owner/repository.git") },
                     singleLine = true,
                     enabled = !inProgress,
@@ -808,8 +819,8 @@ private fun ProjectGitBindingDialog(
                 Text(
                     ppText(
                         language,
-                        "GitHub 建议使用 fine-grained PAT，仅授权这个仓库及所需的 Contents 读/写权限。创建入口：github.com/settings/tokens。其他 Git 服务请填写对应的 HTTPS access token。",
-                        "For GitHub, prefer a fine-grained PAT limited to this repository and the required Contents read/write permission. Create one at github.com/settings/tokens. For other Git hosts, use their HTTPS access token.",
+                        "GitHub 建议使用 fine-grained Personal access token（PAT），仅授权这个仓库及所需的 Contents 读/写权限。创建入口：github.com/settings/tokens。其他 Git 服务请填写对应的访问令牌。",
+                        "For GitHub, prefer a fine-grained Personal access token (PAT) limited to this repository and the required Contents read/write permission. Create one at github.com/settings/tokens. For other Git hosts, use their access token.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

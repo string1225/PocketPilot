@@ -171,7 +171,7 @@ internal class GitSetupCredentialBinding(
     val reference: GitHttpsCredentialRef?
 
     init {
-        require(newToken == null || newToken.isNotEmpty()) { "Git HTTPS token must not be empty" }
+        require(newToken == null || newToken.isNotEmpty()) { "Git Personal access token must not be empty" }
         reference = when {
             newToken != null -> GitHttpsCredentialRef(
                 username = username,
@@ -181,7 +181,7 @@ internal class GitSetupCredentialBinding(
 
             useStoredCredential -> {
                 require(credentials.contains(CredentialIds.DEFAULT_GIT_TOKEN)) {
-                    "A Git HTTPS token is required for credentialed clone"
+                    "A Git Personal access token is required for this authenticated clone"
                 }
                 GitHttpsCredentialRef(
                     username = username,

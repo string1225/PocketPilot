@@ -169,6 +169,7 @@ object LlmNativeRequestCodec {
         usage.inputTokens?.let { put("inputTokens", it) }
         usage.outputTokens?.let { put("outputTokens", it) }
         usage.totalTokens?.let { put("totalTokens", it) }
+        usage.cachedInputTokens?.let { put("cachedInputTokens", it) }
     }
 
     private fun decodeToolCalls(calls: JSONArray): List<LlmToolCall> {
@@ -543,8 +544,10 @@ object OpenAiCompatibleProtocolCodec {
         val inputTokens = usage.optionalNonNegativeLong("prompt_tokens")
         val outputTokens = usage.optionalNonNegativeLong("completion_tokens")
         val totalTokens = usage.optionalNonNegativeLong("total_tokens")
-        if (inputTokens == null && outputTokens == null && totalTokens == null) return null
-        return LlmTokenUsage(inputTokens, outputTokens, totalTokens)
+        val cachedInputTokens = usage.optJSONObject("prompt_tokens_details")
+            ?.optionalNonNegativeLong("cached_tokens")
+        if (inputTokens == null && outputTokens == null && totalTokens == null && cachedInputTokens == null) return null
+        return LlmTokenUsage(inputTokens, outputTokens, totalTokens, cachedInputTokens)
     }
 
     private fun decodeResponsesUsage(usage: JSONObject?): LlmTokenUsage? {
@@ -552,8 +555,10 @@ object OpenAiCompatibleProtocolCodec {
         val inputTokens = usage.optionalNonNegativeLong("input_tokens")
         val outputTokens = usage.optionalNonNegativeLong("output_tokens")
         val totalTokens = usage.optionalNonNegativeLong("total_tokens")
-        if (inputTokens == null && outputTokens == null && totalTokens == null) return null
-        return LlmTokenUsage(inputTokens, outputTokens, totalTokens)
+        val cachedInputTokens = usage.optJSONObject("input_tokens_details")
+            ?.optionalNonNegativeLong("cached_tokens")
+        if (inputTokens == null && outputTokens == null && totalTokens == null && cachedInputTokens == null) return null
+        return LlmTokenUsage(inputTokens, outputTokens, totalTokens, cachedInputTokens)
     }
 
     private fun isOfficialOpenAiEndpoint(baseUrl: String): Boolean = runCatching {

@@ -146,11 +146,11 @@ describe("DefaultAgentRunner", () => {
     const provider = new ScriptedProvider([
       {
         toolCalls: [{ id: "call-usage", name: "test.echo", arguments: {} }],
-        usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 }
+        usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3, cachedInputTokens: 1 }
       },
       {
         content: "Done",
-        usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 }
+        usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7, cachedInputTokens: 3 }
       }
     ]);
     const result = await new DefaultAgentRunner({
@@ -160,7 +160,7 @@ describe("DefaultAgentRunner", () => {
 
     expect(result.events[result.events.length - 1]).toMatchObject({
       type: "run.completed",
-      usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 }
+      usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 4 }
     });
   });
 
@@ -394,6 +394,56 @@ describe("DefaultAgentRunner", () => {
     }).run(input());
     expect(result.status).toBe("completed");
     expect(maximumActive).toBe(2);
+  });
+
+  it("limits parallel-mode tools to the configured concurrency", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const parallelTool = {
+      ...echoTool,
+      executionMode: "parallel" as const,
+      execute: async (value: unknown) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active -= 1;
+        return toolSuccess(value);
+      }
+    };
+    const calls = Array.from({ length: 5 }, (_, index) => ({
+      id: `read-${index}`,
+      name: "test.echo",
+      arguments: index
+    }));
+    const result = await new DefaultAgentRunner({
+      provider: new ScriptedProvider([
+        { finishReason: "tool_calls", toolCalls: calls },
+        { content: "Done" }
+      ]),
+      tools: new ToolRegistry().register(parallelTool),
+      maxConcurrentTools: 2
+    }).run(input());
+    expect(result.status).toBe("completed");
+    expect(maximumActive).toBe(2);
+  });
+
+  it("stops at a configured positive turn limit", async () => {
+    const provider: AgentProvider = {
+      name: "loop",
+      complete: async (request) => ({
+        toolCalls: [{ id: `call-${request.step}`, name: "test.echo", arguments: request.step }]
+      })
+    };
+    const result = await new DefaultAgentRunner({
+      provider,
+      tools: new ToolRegistry().register(echoTool),
+      maxTurns: 3
+    }).run(input());
+    expect(result).toMatchObject({
+      status: "failed",
+      steps: 3,
+      error: { code: "MAX_TURNS_REACHED" }
+    });
   });
 
   it("continues the same run for queued follow-ups and invokes composable hooks", async () => {

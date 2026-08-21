@@ -344,6 +344,12 @@ class RuntimePocketPilotService(
                     }
                     .put("toolsEnabled", runSettings.toolsEnabled)
                     .put(
+                        "runtime",
+                        JSONObject()
+                            .put("maxConcurrentTools", runSettings.maxConcurrentTools)
+                            .put("maxTurns", runSettings.maxAgentTurns),
+                    )
+                    .put(
                         "plugins",
                         if (runSettings.toolsEnabled) runtimePluginsJson() else JSONArray(),
                     )
@@ -395,8 +401,11 @@ class RuntimePocketPilotService(
 
     override fun listRecoverableAgentRuns(): List<AgentRunResume> = agentRuns.listRecoverable()
 
-    override fun resolveApproval(requestId: String, approved: Boolean): Boolean =
-        approvals.resolve(requestId, approved)
+    override fun resolveApproval(
+        requestId: String,
+        approved: Boolean,
+        rememberForRun: Boolean,
+    ): Boolean = approvals.resolve(requestId, approved, rememberForRun)
 
     private fun runtimePluginsJson(): JSONArray = JSONArray().apply {
         plugins.loadEnabledRuntimePackages().forEach { runtimePackage ->
@@ -446,7 +455,7 @@ class RuntimePocketPilotService(
                 .append(if (binding.hasCredential) "yes" else "no")
             append(
                 "\nUse this exact remote for pull/push. PocketPilot will release the project token " +
-                    "only to this bound HTTPS repository and will still request user approval.",
+                    "only to this project's bound repository and will still request user approval.",
             )
         }
         val configuredServers = sshServers.list()
@@ -648,10 +657,11 @@ class RuntimePocketPilotService(
         val prompt = nonNegativeLong("inputTokens")
         val completion = nonNegativeLong("outputTokens")
         val total = nonNegativeLong("totalTokens")
-        return if (prompt == null && completion == null && total == null) {
+        val cached = nonNegativeLong("cachedInputTokens")
+        return if (prompt == null && completion == null && total == null && cached == null) {
             null
         } else {
-            TokenUsage(prompt, completion, total)
+            TokenUsage(prompt, completion, total, cached)
         }
     }
 

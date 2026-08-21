@@ -162,7 +162,13 @@ export class AndroidAgentRuntime {
         : { systemPrompt: request.systemPrompt }),
       onEvent: (event) => {
         this.#postEvent(event);
-      }
+      },
+      ...(request.runtime === undefined
+        ? {}
+        : {
+            maxConcurrentTools: request.runtime.maxConcurrentTools,
+            maxTurns: request.runtime.maxTurns
+          })
     });
 
     const promise = runner

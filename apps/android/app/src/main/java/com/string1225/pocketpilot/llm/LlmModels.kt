@@ -68,13 +68,17 @@ data class LlmTokenUsage(
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
     val totalTokens: Long? = null,
+    val cachedInputTokens: Long? = null,
 ) {
     init {
-        require(inputTokens != null || outputTokens != null || totalTokens != null) {
+        require(inputTokens != null || outputTokens != null || totalTokens != null || cachedInputTokens != null) {
             "Token usage must contain at least one value"
         }
-        require(listOfNotNull(inputTokens, outputTokens, totalTokens).all { it >= 0 }) {
+        require(listOfNotNull(inputTokens, outputTokens, totalTokens, cachedInputTokens).all { it >= 0 }) {
             "Token usage values must not be negative"
+        }
+        require(cachedInputTokens == null || inputTokens == null || cachedInputTokens <= inputTokens) {
+            "Cached input tokens cannot exceed input tokens"
         }
     }
 }

@@ -29,6 +29,10 @@ export interface DefaultAgentRunnerOptions {
   readonly hooks?: readonly AgentTurnHooks[];
   readonly reserveOutputTokens?: number;
   readonly summaryTokens?: number;
+  /** Maximum simultaneously executing parallel-mode tools for this Run. */
+  readonly maxConcurrentTools?: number;
+  /** Zero or undefined means unlimited provider turns. */
+  readonly maxTurns?: number;
 }
 
 type AgentEventInput<TEvent = AgentEvent> = TEvent extends AgentEvent
@@ -56,10 +60,12 @@ const addUsage = (
   const inputTokens = sum(aggregate?.inputTokens, next.inputTokens);
   const outputTokens = sum(aggregate?.outputTokens, next.outputTokens);
   const totalTokens = sum(aggregate?.totalTokens, next.totalTokens);
+  const cachedInputTokens = sum(aggregate?.cachedInputTokens, next.cachedInputTokens);
   return {
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
-    ...(totalTokens === undefined ? {} : { totalTokens })
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens })
   };
 };
 
@@ -82,6 +88,8 @@ export class DefaultAgentRunner implements AgentRunner {
   readonly #hooks: readonly AgentTurnHooks[];
   readonly #reserveOutputTokens: number;
   readonly #summaryTokens: number;
+  readonly #maxConcurrentTools: number;
+  readonly #maxTurns: number;
 
   public constructor(options: DefaultAgentRunnerOptions) {
     this.#provider = options.provider;
@@ -92,6 +100,14 @@ export class DefaultAgentRunner implements AgentRunner {
     this.#hooks = options.hooks ?? [];
     this.#reserveOutputTokens = options.reserveOutputTokens ?? 16_384;
     this.#summaryTokens = options.summaryTokens ?? 4_096;
+    this.#maxConcurrentTools = options.maxConcurrentTools ?? 4;
+    this.#maxTurns = options.maxTurns ?? 0;
+    if (!Number.isSafeInteger(this.#maxConcurrentTools) || this.#maxConcurrentTools < 1 || this.#maxConcurrentTools > 32) {
+      throw new Error("maxConcurrentTools must be an integer between 1 and 32.");
+    }
+    if (!Number.isSafeInteger(this.#maxTurns) || this.#maxTurns < 0 || this.#maxTurns > 100_000) {
+      throw new Error("maxTurns must be zero (unlimited) or a positive integer no greater than 100000.");
+    }
   }
 
   public async run(input: AgentRunInput): Promise<AgentRunResult> {
@@ -177,6 +193,13 @@ export class DefaultAgentRunner implements AgentRunner {
     let runUsage: ProviderTokenUsage | undefined;
     let step = input.resume?.nextStep ?? 1;
     for (;; step += 1) {
+      if (this.#maxTurns > 0 && step > this.#maxTurns) {
+        return failed(step - 1, {
+          code: "MAX_TURNS_REACHED",
+          message: `Agent reached the configured maximum of ${this.#maxTurns} turns.`,
+          retryable: false
+        });
+      }
       if (signal.aborted) return cancelled(step - 1);
       const steering = input.control?.drainSteering() ?? [];
       if (steering.length > 0) messages.push(...steering);
@@ -348,11 +371,16 @@ export class DefaultAgentRunner implements AgentRunner {
         } catch (error) {
           return hookFailed(step, error);
         }
-        const results = await Promise.all(group.map((call) => this.#tools.execute(
-          call.name,
-          call.arguments,
-          { runId: input.runId, projectId: input.projectId, callId: call.id, signal },
-        )));
+        const results: ToolResult<unknown>[] = [];
+        for (let batchOffset = 0; batchOffset < group.length; batchOffset += this.#maxConcurrentTools) {
+          if (signal.aborted) return cancelled(step);
+          const batch = group.slice(batchOffset, batchOffset + this.#maxConcurrentTools);
+          results.push(...await Promise.all(batch.map((call) => this.#tools.execute(
+            call.name,
+            call.arguments,
+            { runId: input.runId, projectId: input.projectId, callId: call.id, signal },
+          ))));
+        }
         for (let index = 0; index < group.length; index += 1) {
           const call = group[index]!;
           const result = results[index]!;

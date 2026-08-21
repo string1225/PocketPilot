@@ -111,6 +111,26 @@ class SettingsRepositoryMigrationTest {
             assertEquals("glm-5.3", repository.load().modelName)
         }
 
+    @Test
+    fun runtimeLimitsDefaultAndRoundTrip() = withRepository { _, repository ->
+        val defaults = repository.load()
+        assertEquals(3, defaults.maxConcurrentSessions)
+        assertEquals(4, defaults.maxConcurrentTools)
+        assertEquals(0, defaults.maxAgentTurns)
+
+        repository.save(
+            defaults.copy(
+                maxConcurrentSessions = 5,
+                maxConcurrentTools = 2,
+                maxAgentTurns = 24,
+            ),
+        )
+        val restored = repository.load()
+        assertEquals(5, restored.maxConcurrentSessions)
+        assertEquals(2, restored.maxConcurrentTools)
+        assertEquals(24, restored.maxAgentTurns)
+    }
+
     private fun withRepository(
         block: (PocketPilotDatabase, SettingsRepository) -> Unit,
     ) {

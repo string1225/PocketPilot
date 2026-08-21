@@ -63,10 +63,30 @@ class PendingAgentTaskQueueTest {
         assertEquals(other, queue.dequeue("project-b"))
     }
 
-    private fun task(id: String, projectId: String) = PendingAgentTask(
+    @Test
+    fun `global dequeue skips a busy conversation without reordering eligible work`() {
+        val queue = PendingAgentTaskQueue()
+        queue.enqueue(task("busy-1", "project-a", "conversation-a"))
+        queue.enqueue(task("ready-1", "project-a", "conversation-b"))
+        queue.enqueue(task("ready-2", "project-b", "conversation-c"))
+
+        assertEquals(
+            "ready-1",
+            queue.dequeueFirst { it.conversationId != "conversation-a" }?.id,
+        )
+        assertEquals("busy-1", queue.dequeue()?.id)
+        assertEquals("ready-2", queue.dequeue()?.id)
+        assertNull(queue.dequeue())
+    }
+
+    private fun task(
+        id: String,
+        projectId: String,
+        conversationId: String = "conversation",
+    ) = PendingAgentTask(
         id = id,
         projectId = projectId,
-        conversationId = "conversation",
+        conversationId = conversationId,
         task = id,
         attachments = emptyList(),
         userItem = TimelineItem(

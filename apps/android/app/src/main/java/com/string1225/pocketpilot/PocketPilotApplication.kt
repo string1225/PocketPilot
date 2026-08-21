@@ -6,6 +6,7 @@ import android.webkit.WebView
 import com.string1225.pocketpilot.background.AgentNotifications
 import com.string1225.pocketpilot.background.AgentRunCoordinator
 import com.string1225.pocketpilot.background.ConversationTranscriptStore
+import com.string1225.pocketpilot.backup.PocketPilotBackupManager
 import com.string1225.pocketpilot.data.PocketPilotDatabase
 import com.string1225.pocketpilot.data.AgentRunRepository
 import com.string1225.pocketpilot.data.CheckpointRepository
@@ -25,6 +26,7 @@ import com.string1225.pocketpilot.runtime.ActiveRunRegistry
 import com.string1225.pocketpilot.runtime.RuntimeEventRouter
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
 import com.string1225.pocketpilot.runtime.PluginRunCoordinationGate
+import com.string1225.pocketpilot.runtime.ProjectToolExecutionGate
 import com.string1225.pocketpilot.llm.LlmToolRequestDispatcher
 import com.string1225.pocketpilot.llm.OpenAiCompatibleLlmClient
 import com.string1225.pocketpilot.llm.OpenAiCompatibleVisionClient
@@ -52,6 +54,8 @@ class PocketPilotApplication : Application() {
     lateinit var attachmentImageStore: AttachmentImageStore
         private set
     lateinit var updateManager: GitHubReleaseUpdateManager
+        private set
+    lateinit var backupManager: PocketPilotBackupManager
         private set
 
     private var runtimeBridge: PocketPilotRuntimeBridge? = null
@@ -104,11 +108,13 @@ class PocketPilotApplication : Application() {
         val sshServers = SshServerRepository(database, credentialStore)
         val plugins = PluginRepository(database, File(filesDir, "plugins"))
         val pluginRuns = PluginRunCoordinationGate()
+        backupManager = PocketPilotBackupManager(this, database, credentialStore, pluginRuns)
 
         service = try {
             val eventRouter = RuntimeEventRouter()
             runtimeEvents = eventRouter
-            val workspaceDispatcher = WorkspaceToolDispatcher(workspace, activeRuns, approvals)
+            val projectTools = ProjectToolExecutionGate()
+            val workspaceDispatcher = WorkspaceToolDispatcher(workspace, activeRuns, approvals, projectTools)
             val integrationDispatcher = IntegrationToolDispatcher(
                 projectsRoot = projectsRoot,
                 checkpoints = checkpoints,
@@ -118,6 +124,7 @@ class PocketPilotApplication : Application() {
                 activeRuns = activeRuns,
                 approvals = approvals,
                 fallback = workspaceDispatcher,
+                projectGate = projectTools,
             )
             val httpDispatcher = HttpToolDispatcher(
                 executor = OkHttpToolExecutor(),

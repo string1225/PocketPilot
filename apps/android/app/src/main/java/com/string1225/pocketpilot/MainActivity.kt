@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
                 application.agentRunCoordinator,
                 ChatImageAttachmentImporter(this, application.attachmentImageStore),
                 application.updateManager,
+                application.backupManager,
             ),
         )[PocketPilotViewModel::class.java]
         handleOpenConversationIntent(intent)

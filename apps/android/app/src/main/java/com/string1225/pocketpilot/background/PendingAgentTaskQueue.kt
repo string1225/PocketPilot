@@ -21,7 +21,7 @@ data class AgentTaskSubmission(
     val queued: Boolean,
 )
 
-/** Thread-safe process-local FIFO; ordering is FIFO independently per project. */
+/** Thread-safe process-local FIFO shared by every project and conversation. */
 internal class PendingAgentTaskQueue {
     private val mutableTasks = MutableStateFlow<List<PendingAgentTask>>(emptyList())
     val tasks: StateFlow<List<PendingAgentTask>> = mutableTasks.asStateFlow()
@@ -36,6 +36,24 @@ internal class PendingAgentTaskQueue {
     fun dequeue(projectId: String): PendingAgentTask? {
         val current = mutableTasks.value
         val index = current.indexOfFirst { it.projectId == projectId }
+        if (index < 0) return null
+        val task = current[index]
+        mutableTasks.value = current.toMutableList().also { it.removeAt(index) }
+        return task
+    }
+
+    @Synchronized
+    fun dequeue(): PendingAgentTask? {
+        val current = mutableTasks.value
+        val task = current.firstOrNull() ?: return null
+        mutableTasks.value = current.drop(1)
+        return task
+    }
+
+    @Synchronized
+    fun dequeueFirst(predicate: (PendingAgentTask) -> Boolean): PendingAgentTask? {
+        val current = mutableTasks.value
+        val index = current.indexOfFirst(predicate)
         if (index < 0) return null
         val task = current[index]
         mutableTasks.value = current.toMutableList().also { it.removeAt(index) }

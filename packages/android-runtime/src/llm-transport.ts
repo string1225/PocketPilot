@@ -119,13 +119,24 @@ const parseUsage = (value: unknown): ProviderTokenUsage | undefined => {
   const inputTokens = parseNonNegativeInteger(record.inputTokens, "inputTokens");
   const outputTokens = parseNonNegativeInteger(record.outputTokens, "outputTokens");
   const totalTokens = parseNonNegativeInteger(record.totalTokens, "totalTokens");
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+  const cachedInputTokens = parseNonNegativeInteger(record.cachedInputTokens, "cachedInputTokens");
+  if (
+    inputTokens === undefined && outputTokens === undefined &&
+    totalTokens === undefined && cachedInputTokens === undefined
+  ) {
     return undefined;
+  }
+  if (cachedInputTokens !== undefined && inputTokens !== undefined && cachedInputTokens > inputTokens) {
+    throw new NativeLlmTransportError(
+      "LLM_INVALID_RESPONSE",
+      "Native LLM cachedInputTokens cannot exceed inputTokens.",
+    );
   }
   return {
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
-    ...(totalTokens === undefined ? {} : { totalTokens })
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens })
   };
 };
 

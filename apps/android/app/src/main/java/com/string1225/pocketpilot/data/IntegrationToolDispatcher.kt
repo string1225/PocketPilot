@@ -28,6 +28,7 @@ import com.string1225.pocketpilot.runtime.NativeToolResult
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
 import com.string1225.pocketpilot.runtime.ToolDispatchException
 import com.string1225.pocketpilot.runtime.ToolRequestDispatcher
+import com.string1225.pocketpilot.runtime.ProjectToolExecutionGate
 import com.string1225.pocketpilot.security.SecureCredentialStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -51,6 +52,7 @@ class IntegrationToolDispatcher(
     private val activeRuns: ActiveRunRegistry,
     private val approvals: ToolApprovalCoordinator,
     private val fallback: ToolRequestDispatcher,
+    private val projectGate: ProjectToolExecutionGate = ProjectToolExecutionGate(),
 ) : ToolRequestDispatcher {
     override suspend fun dispatch(request: NativeToolRequest): NativeToolResult {
         if (!request.name.startsWith("git.") && request.name != "ssh.execute") {
@@ -68,7 +70,7 @@ class IntegrationToolDispatcher(
         return if (request.name == "ssh.execute") {
             executeSsh(request, arguments)
         } else {
-            executeGit(request, arguments)
+            projectGate.withProject(request.projectId) { executeGit(request, arguments) }
         }
     }
 
@@ -540,7 +542,7 @@ class IntegrationToolDispatcher(
         val binding = gitBindings.get(projectId)
             ?: throw ToolDispatchException(
                 "GIT_BINDING_MISSING",
-                "Bind this project to its Git HTTPS repository before releasing a credential",
+                "Bind this project to its Git repository before releasing a credential",
             )
         if (!binding.hasCredential) {
             throw ToolDispatchException("GIT_CREDENTIAL_MISSING", "This project's Personal access token is missing")

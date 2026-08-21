@@ -9,8 +9,11 @@ import com.string1225.pocketpilot.model.ChatImageAttachment
 import com.string1225.pocketpilot.model.TimelineItem
 import com.string1225.pocketpilot.model.TimelineItemKind
 import com.string1225.pocketpilot.model.ToolApprovalRequest
+import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.model.RuntimeSettingsPolicy
 import com.string1225.pocketpilot.ui.PocketPilotService
 import java.io.Closeable
+import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -79,6 +82,9 @@ class AgentRunCoordinator(
     private val finishingRunIds = mutableSetOf<String>()
     private val mutableRuns = MutableStateFlow<Map<String, CoordinatedAgentRun>>(emptyMap())
     private val taskQueue = PendingAgentTaskQueue()
+    private val pendingRecoveries = ArrayDeque<AgentRunResume>()
+    @Volatile
+    private var maxConcurrentSessions = RuntimeSettingsPolicy.DEFAULT_CONCURRENT_SESSIONS
 
     val runs: StateFlow<Map<String, CoordinatedAgentRun>> = mutableRuns.asStateFlow()
     val pendingTasks: StateFlow<List<PendingAgentTask>> = taskQueue.tasks
@@ -118,14 +124,17 @@ class AgentRunCoordinator(
         var resumed = 0
         service.listRecoverableAgentRuns().forEach { recovery ->
             synchronized(runLock) {
-                if (mutableRuns.value.values.any {
-                        it.projectId == recovery.projectId && !it.status.isTerminal
-                    }
-                ) return@forEach
+                if (mutableRuns.value.containsKey(recovery.runId) || pendingRecoveries.any { it.runId == recovery.runId }) {
+                    return@forEach
+                }
+                if (!canStartSessionLocked(recovery.conversationId)) {
+                    pendingRecoveries.addLast(recovery)
+                    return@forEach
+                }
+                runCatching { startRecovered(recovery) }
+                    .onSuccess { resumed += 1 }
+                    .onFailure { Log.e(TAG, "Unable to resume safe Agent boundary", it) }
             }
-            runCatching { startRecovered(recovery) }
-                .onSuccess { resumed += 1 }
-                .onFailure { Log.e(TAG, "Unable to resume safe Agent boundary", it) }
         }
         return resumed
     }
@@ -163,10 +172,13 @@ class AgentRunCoordinator(
                 return AgentTaskSubmission(submitted.id, queued = true)
             }
             taskQueue.enqueue(submitted)
-            if (mutableRuns.value.values.any { it.projectId == projectId && !it.status.isTerminal }) {
+            if (!canStartSessionLocked(conversationId)) {
                 return AgentTaskSubmission(submitted.id, queued = true)
             }
-            val next = checkNotNull(taskQueue.dequeue(projectId))
+            val activeConversationIds = mutableRuns.value.values
+                .filterNot { it.status.isTerminal }
+                .mapTo(mutableSetOf()) { it.conversationId }
+            val next = checkNotNull(taskQueue.dequeueFirst { it.conversationId !in activeConversationIds })
             return try {
                 startPending(next)
                 AgentTaskSubmission(submitted.id, queued = next.id != submitted.id).also {
@@ -235,10 +247,8 @@ class AgentRunCoordinator(
         )
         synchronized(runLock) {
             check(
-                mutableRuns.value.values.none {
-                    it.projectId == pending.projectId && !it.status.isTerminal
-                },
-            ) { "This project already has an active run" }
+                canStartSessionLocked(pending.conversationId),
+            ) { "The configured concurrent session limit has been reached" }
             mutableRuns.value = mutableRuns.value + (runId to run)
         }
         val foregroundIntent = AgentRunForegroundService.startIntent(
@@ -304,9 +314,9 @@ class AgentRunCoordinator(
             startedAt = System.currentTimeMillis(),
         )
         synchronized(runLock) {
-            check(mutableRuns.value.values.none {
-                it.projectId == recovery.projectId && !it.status.isTerminal
-            }) { "This project already has an active run" }
+            check(canStartSessionLocked(recovery.conversationId)) {
+                "The configured concurrent session limit has been reached"
+            }
             mutableRuns.value = mutableRuns.value + (recovery.runId to run)
         }
         try {
@@ -388,8 +398,17 @@ class AgentRunCoordinator(
 
     fun hasQueuedConversationTasks(conversationId: String): Boolean = taskQueue.hasConversation(conversationId)
 
-    fun resolveApproval(requestId: String, approved: Boolean): Boolean =
-        service.resolveApproval(requestId, approved)
+    fun updateRuntimeSettings(settings: PocketPilotSettings) {
+        RuntimeSettingsPolicy.requireValid(settings)
+        maxConcurrentSessions = settings.maxConcurrentSessions
+        synchronized(runLock) { startQueuedTasksLocked() }
+    }
+
+    fun resolveApproval(
+        requestId: String,
+        approved: Boolean,
+        rememberForRun: Boolean = false,
+    ): Boolean = service.resolveApproval(requestId, approved, rememberForRun)
 
     fun removeTerminalRun(runId: String) {
         synchronized(runLock) {
@@ -467,13 +486,7 @@ class AgentRunCoordinator(
             mutableRuns.value = current + (runId to terminalRun)
             finishingRunIds.remove(runId)
 
-            taskQueue.dequeue(run.projectId)?.let { next ->
-                runCatching { startPending(next) }
-                    .onFailure { error ->
-                        taskQueue.prepend(next)
-                        Log.e(TAG, "Unable to start queued Agent task", error)
-                    }
-            }
+            startQueuedTasksLocked()
         }
         val run = finished ?: return
         AgentNotifications.showCompletion(appContext, run)
@@ -523,6 +536,45 @@ class AgentRunCoordinator(
             }
         }
         transcriptJobs[run.runId] = writer
+    }
+
+    private fun canStartSessionLocked(conversationId: String): Boolean {
+        val active = mutableRuns.value.values.filterNot { it.status.isTerminal }
+        return active.size < maxConcurrentSessions && active.none { it.conversationId == conversationId }
+    }
+
+    private fun startQueuedTasksLocked() {
+        while (mutableRuns.value.values.count { !it.status.isTerminal } < maxConcurrentSessions) {
+            val activeConversationIds = mutableRuns.value.values
+                .filterNot { it.status.isTerminal }
+                .mapTo(mutableSetOf()) { it.conversationId }
+            val recoveryIterator = pendingRecoveries.iterator()
+            var recovery: AgentRunResume? = null
+            while (recoveryIterator.hasNext()) {
+                val candidate = recoveryIterator.next()
+                if (candidate.conversationId !in activeConversationIds) {
+                    recoveryIterator.remove()
+                    recovery = candidate
+                    break
+                }
+            }
+            if (recovery != null) {
+                runCatching { startRecovered(recovery) }
+                    .onFailure { error ->
+                        pendingRecoveries.addFirst(recovery)
+                        Log.e(TAG, "Unable to resume queued safe Agent boundary", error)
+                        return
+                    }
+                continue
+            }
+            val next = taskQueue.dequeueFirst { it.conversationId !in activeConversationIds } ?: return
+            runCatching { startPending(next) }
+                .onFailure { error ->
+                    taskQueue.prepend(next)
+                    Log.e(TAG, "Unable to start queued Agent task", error)
+                    return
+                }
+        }
     }
 
     private sealed interface TranscriptCommand {

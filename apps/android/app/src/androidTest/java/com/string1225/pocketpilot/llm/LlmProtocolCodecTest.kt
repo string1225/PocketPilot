@@ -197,14 +197,14 @@ class LlmProtocolCodecTest {
             """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"$apiName","arguments":"{\"path\":"}}]},"finish_reason":null}]}""",
         )
         decoder.accept(
-            """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}""",
+            """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":9}}}""",
         )
         val response = decoder.finish()
 
         assertEquals("我会", response.content)
         assertEquals("workspace.read", response.toolCalls.single().name)
         assertEquals("README.md", JSONObject(response.toolCalls.single().argumentsJson).getString("path"))
-        assertEquals(LlmTokenUsage(12, 4, 16), response.usage)
+        assertEquals(LlmTokenUsage(12, 4, 16, 9), response.usage)
     }
 
     @Test

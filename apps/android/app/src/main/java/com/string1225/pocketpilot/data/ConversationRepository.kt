@@ -103,8 +103,9 @@ class ConversationRepository(
                         promptTokens = cursor.takeUnless { it.isNull(9) }?.getLong(9),
                         completionTokens = cursor.takeUnless { it.isNull(10) }?.getLong(10),
                         totalTokens = cursor.takeUnless { it.isNull(11) }?.getLong(11),
+                        cachedPromptTokens = cursor.takeUnless { it.isNull(12) }?.getLong(12),
                     ),
-                    attachments = decodeAttachments(cursor.getString(12)),
+                    attachments = decodeAttachments(cursor.getString(13)),
                 )
             }
         }
@@ -162,6 +163,7 @@ class ConversationRepository(
                 putNullableLong("prompt_tokens", message.tokenUsage?.promptTokens)
                 putNullableLong("completion_tokens", message.tokenUsage?.completionTokens)
                 putNullableLong("total_tokens", message.tokenUsage?.totalTokens)
+                putNullableLong("cached_prompt_tokens", message.tokenUsage?.cachedPromptTokens)
                 put("attachments_json", attachmentsJson)
             }
             val updated = db.update(
@@ -199,6 +201,7 @@ class ConversationRepository(
             "prompt_tokens",
             "completion_tokens",
             "total_tokens",
+            "cached_prompt_tokens",
             "attachments_json",
         )
 
@@ -215,11 +218,21 @@ class ConversationRepository(
 
         private fun validateTokenUsage(usage: TokenUsage?) {
             if (usage == null) return
-            val values = listOfNotNull(usage.promptTokens, usage.completionTokens, usage.totalTokens)
+            val values = listOfNotNull(
+                usage.promptTokens,
+                usage.completionTokens,
+                usage.totalTokens,
+                usage.cachedPromptTokens,
+            )
             require(values.all { it >= 0L }) { "Token usage cannot be negative" }
             if (usage.totalTokens != null && usage.promptTokens != null && usage.completionTokens != null) {
                 require(usage.totalTokens >= usage.promptTokens + usage.completionTokens) {
                     "Total token usage is invalid"
+                }
+            }
+            if (usage.cachedPromptTokens != null && usage.promptTokens != null) {
+                require(usage.cachedPromptTokens <= usage.promptTokens) {
+                    "Cached prompt tokens cannot exceed prompt tokens"
                 }
             }
         }
@@ -228,9 +241,14 @@ class ConversationRepository(
             promptTokens: Long?,
             completionTokens: Long?,
             totalTokens: Long?,
+            cachedPromptTokens: Long?,
         ): TokenUsage? {
-            if (promptTokens == null && completionTokens == null && totalTokens == null) return null
-            return TokenUsage(promptTokens, completionTokens, totalTokens).also(::validateTokenUsage)
+            if (
+                promptTokens == null && completionTokens == null &&
+                totalTokens == null && cachedPromptTokens == null
+            ) return null
+            return TokenUsage(promptTokens, completionTokens, totalTokens, cachedPromptTokens)
+                .also(::validateTokenUsage)
         }
 
         internal fun encodeAttachments(attachments: List<ChatImageAttachment>): String {

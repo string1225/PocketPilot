@@ -7,6 +7,7 @@ import com.string1225.pocketpilot.model.LlmProviderPreference
 import com.string1225.pocketpilot.model.LlmProtocolPreference
 import com.string1225.pocketpilot.model.LlmSettingsPolicy
 import com.string1225.pocketpilot.model.PocketPilotSettings
+import com.string1225.pocketpilot.model.RuntimeSettingsPolicy
 import com.string1225.pocketpilot.model.ThemePreference
 
 internal object OnboardingVersionPolicy {
@@ -138,6 +139,16 @@ class SettingsRepository(
             personalization = get(KEY_PERSONALIZATION).orEmpty(),
             memoryEnabled = getBoolean(KEY_MEMORY_ENABLED, true),
             toolsEnabled = getBoolean(KEY_TOOLS_ENABLED, true),
+            maxConcurrentSessions = getInt(
+                KEY_MAX_CONCURRENT_SESSIONS,
+                RuntimeSettingsPolicy.DEFAULT_CONCURRENT_SESSIONS,
+            ).coerceIn(1, RuntimeSettingsPolicy.MAX_CONCURRENT_SESSIONS),
+            maxConcurrentTools = getInt(
+                KEY_MAX_CONCURRENT_TOOLS,
+                RuntimeSettingsPolicy.DEFAULT_CONCURRENT_TOOLS,
+            ).coerceIn(1, RuntimeSettingsPolicy.MAX_CONCURRENT_TOOLS),
+            maxAgentTurns = getInt(KEY_MAX_AGENT_TURNS, RuntimeSettingsPolicy.DEFAULT_MAX_TURNS)
+                .coerceIn(0, RuntimeSettingsPolicy.MAX_TURNS),
             theme = ThemePreference.fromValue(get(KEY_THEME).orEmpty()),
             language = AppLanguage.fromValue(get(KEY_LANGUAGE).orEmpty()),
         )
@@ -215,6 +226,7 @@ class SettingsRepository(
         }
         require(settings.remoteServer.length <= 240) { "Remote server label is too long" }
         require(settings.personalization.length <= 4_000) { "Personalization is too long" }
+        RuntimeSettingsPolicy.requireValid(settings)
         val values = mapOf(
             KEY_MODEL_NAME to settings.modelName.trim(),
             KEY_LLM_PROVIDER to settings.llmProvider.value,
@@ -228,6 +240,9 @@ class SettingsRepository(
             KEY_PERSONALIZATION to settings.personalization.trim(),
             KEY_MEMORY_ENABLED to settings.memoryEnabled.toString(),
             KEY_TOOLS_ENABLED to settings.toolsEnabled.toString(),
+            KEY_MAX_CONCURRENT_SESSIONS to settings.maxConcurrentSessions.toString(),
+            KEY_MAX_CONCURRENT_TOOLS to settings.maxConcurrentTools.toString(),
+            KEY_MAX_AGENT_TURNS to settings.maxAgentTurns.toString(),
             KEY_THEME to settings.theme.value,
             KEY_LANGUAGE to settings.language.value,
         )
@@ -258,6 +273,8 @@ class SettingsRepository(
         "false" -> false
         else -> fallback
     }
+
+    private fun getInt(key: String, fallback: Int): Int = get(key)?.toIntOrNull() ?: fallback
 
     private fun put(database: android.database.sqlite.SQLiteDatabase, key: String, value: String) {
         val row = ContentValues().apply {
@@ -293,6 +310,9 @@ class SettingsRepository(
         const val KEY_PERSONALIZATION = "personalization"
         const val KEY_MEMORY_ENABLED = "memory_enabled"
         const val KEY_TOOLS_ENABLED = "tools_enabled"
+        const val KEY_MAX_CONCURRENT_SESSIONS = "runtime_max_concurrent_sessions"
+        const val KEY_MAX_CONCURRENT_TOOLS = "runtime_max_concurrent_tools"
+        const val KEY_MAX_AGENT_TURNS = "runtime_max_agent_turns"
         const val KEY_THEME = "theme"
         const val KEY_LANGUAGE = "language"
     }

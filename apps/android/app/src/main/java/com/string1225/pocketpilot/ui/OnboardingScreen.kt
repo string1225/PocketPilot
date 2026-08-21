@@ -111,7 +111,9 @@ internal fun OnboardingScreen(
     var useStoredGitCredential by rememberSaveable { mutableStateOf(false) }
     // Credentials deliberately never enter SavedState or the ViewModel state.
     var gitToken by remember { mutableStateOf("") }
-    var serverDecision by rememberSaveable { mutableStateOf<SetupDecision?>(null) }
+    var serverDecision by rememberSaveable(state.remoteServers.isNotEmpty()) {
+        mutableStateOf(if (state.remoteServers.isNotEmpty()) SetupDecision.YES else null)
+    }
     var editingServer by remember { mutableStateOf<RemoteServerProfile?>(null) }
 
     val modelReady = OnboardingFlowPolicy.canContinueModel(
@@ -518,19 +520,30 @@ private fun ProjectStep(
         item {
             StepTitle(
                 icon = Icons.Default.FolderOpen,
-                title = ppText(language, "现在配置项目吗？", "Set up a project now?"),
-                body = ppText(language, "可以创建一个本地 Workspace，也可以通过 HTTPS 克隆 Git 仓库；稍后仍可在项目页继续添加。", "Create a local workspace or clone a Git repository over HTTPS. You can always add more projects later."),
+                title = ppText(language, "配置项目", "Set up a project"),
+                body = ppText(language, "可以创建一个本地项目文件夹，或克隆现有 Git 仓库；也可稍后在项目页添加。", "Create a local project folder or clone an existing Git repository. You can also add one later from the Projects page."),
             )
         }
-        item {
-            DecisionChoices(language, decision, onDecisionChange)
+        if (!state.onboardingProjectSetupSucceeded) {
+            item { DecisionChoices(language, decision, onDecisionChange) }
         }
-        if (decision == SetupDecision.YES && state.onboardingProjectSetupSucceeded) {
+        if (state.onboardingProjectSetupSucceeded) {
             item {
                 StatusCard(
                     completed = true,
                     title = ppText(language, "项目已配置", "Project configured"),
-                    body = state.selectedProject?.name.orEmpty(),
+                    body = state.selectedProject?.let { project ->
+                        state.projectGitBinding
+                            ?.takeIf { it.projectId == project.id }
+                            ?.let { binding ->
+                                "${project.name}\n${binding.remoteName}: ${binding.remoteUrl}"
+                            }
+                            ?: ppText(
+                                language,
+                                "${project.name} · 本地项目文件夹",
+                                "${project.name} · Local project folder",
+                            )
+                    }.orEmpty(),
                 )
             }
         } else if (decision == SetupDecision.YES) {
@@ -550,7 +563,7 @@ private fun ProjectStep(
                             Text(
                                 when (choice) {
                                     ProjectSetupMode.LOCAL -> ppText(language, "本地项目", "Local project")
-                                    ProjectSetupMode.GIT -> ppText(language, "Git HTTPS 克隆", "Git HTTPS clone")
+                                    ProjectSetupMode.GIT -> ppText(language, "克隆 Git 仓库", "Clone Git repository")
                                 },
                             )
                         }
@@ -593,14 +606,14 @@ private fun ProjectStep(
                     OutlinedTextField(
                         value = gitRemoteUrl,
                         onValueChange = onGitRemoteUrlChange,
-                        label = { Text("Git HTTPS URL") },
+                        label = { Text(ppText(language, "Git 仓库地址", "Git repository URL")) },
                         placeholder = { Text("https://github.com/owner/repository.git") },
                         supportingText = {
                             Text(
                                 remoteValidation ?: ppText(
                                     language,
-                                    "仅支持 HTTPS；不要把用户名或 Token 写进 URL。",
-                                    "HTTPS only; never put a username or token in the URL.",
+                                    "不要把用户名或 Token 写进仓库地址。",
+                                    "Never put a username or token in the repository URL.",
                                 ),
                             )
                         },
@@ -669,7 +682,7 @@ private fun ProjectStep(
                         enabled = gitFormValid && !state.onboardingProjectSetupInProgress,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        ProjectOperationLabel(state, ppText(language, "安全克隆并选择项目", "Clone securely and select project"))
+                        ProjectOperationLabel(state, ppText(language, "克隆并选择项目", "Clone and select project"))
                     }
                 }
             }
@@ -706,12 +719,14 @@ private fun ServerStep(
         item {
             StepTitle(
                 icon = Icons.Default.Terminal,
-                title = ppText(language, "现在配置远程服务器吗？", "Set up a remote server now?"),
+                title = ppText(language, "配置远程服务器", "Set up a remote server"),
                 body = ppText(language, "SSH 服务器承担构建、测试和长任务。密码或私钥会进入设备加密存储，主机指纹用于阻止中间人攻击。", "An SSH server can handle builds, tests, and long-running jobs. Passwords or keys are encrypted on-device, and host fingerprints protect against interception."),
             )
         }
-        item { DecisionChoices(language, decision, onDecisionChange) }
-        if (decision == SetupDecision.YES) {
+        if (servers.isEmpty()) {
+            item { DecisionChoices(language, decision, onDecisionChange) }
+        }
+        if (decision == SetupDecision.YES || servers.isNotEmpty()) {
             if (servers.isEmpty()) {
                 item {
                     StatusCard(

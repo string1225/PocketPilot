@@ -6,6 +6,7 @@ import com.string1225.pocketpilot.model.ToolApprovalRequest
 import com.string1225.pocketpilot.runtime.ActiveRunRegistry
 import com.string1225.pocketpilot.runtime.NativeToolRequest
 import com.string1225.pocketpilot.runtime.NativeToolResult
+import com.string1225.pocketpilot.runtime.ProjectToolExecutionGate
 import com.string1225.pocketpilot.runtime.ToolApprovalCoordinator
 import com.string1225.pocketpilot.runtime.ToolDispatchException
 import com.string1225.pocketpilot.runtime.ToolRequestDispatcher
@@ -20,8 +21,10 @@ class WorkspaceToolDispatcher(
     private val workspace: WorkspaceRepository,
     private val activeRuns: ActiveRunRegistry,
     private val approvals: ToolApprovalCoordinator,
+    private val projectGate: ProjectToolExecutionGate = ProjectToolExecutionGate(),
 ) : ToolRequestDispatcher {
-    override suspend fun dispatch(request: NativeToolRequest): NativeToolResult = withContext(Dispatchers.IO) {
+    override suspend fun dispatch(request: NativeToolRequest): NativeToolResult =
+        projectGate.withProject(request.projectId) { withContext(Dispatchers.IO) {
         try {
             requireAuthorized(request)
             val arguments = JSONObject(request.argumentsJson)
@@ -57,7 +60,7 @@ class WorkspaceToolDispatcher(
         } catch (error: Exception) {
             throw ToolDispatchException("WORKSPACE_OPERATION_FAILED", error.message ?: "Workspace operation failed", error)
         }
-    }
+        } }
 
     private suspend fun delete(request: NativeToolRequest, arguments: JSONObject): JSONObject {
         val path = WorkspacePath.normalize(arguments.requiredString("path"))

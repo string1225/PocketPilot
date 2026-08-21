@@ -67,6 +67,13 @@ export interface RuntimeStartRequest {
     readonly messages: readonly AgentMessage[];
     readonly nextStep: number;
   };
+  readonly runtime?: RuntimeExecutionConfig;
+}
+
+export interface RuntimeExecutionConfig {
+  readonly maxConcurrentTools: number;
+  /** Zero means unlimited. */
+  readonly maxTurns: number;
 }
 
 export interface RuntimePluginTool {
@@ -512,7 +519,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     messages,
     toolsEnabled,
     plugins,
-    resume
+    resume,
+    runtime
   } = record;
   if (
     typeof runId !== "string" ||
@@ -537,6 +545,28 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
   const parsedMessages = parseHistory(messages);
   const parsedPlugins = parsePlugins(plugins);
   const parsedResume = parseResume(resume);
+  const parsedRuntime = (() => {
+    if (runtime === undefined) return undefined;
+    const value = asRecord(runtime);
+    if (
+      value === undefined ||
+      Object.keys(value).some((key) => key !== "maxConcurrentTools" && key !== "maxTurns") ||
+      typeof value.maxConcurrentTools !== "number" ||
+      !Number.isSafeInteger(value.maxConcurrentTools) ||
+      value.maxConcurrentTools < 1 ||
+      value.maxConcurrentTools > 32 ||
+      typeof value.maxTurns !== "number" ||
+      !Number.isSafeInteger(value.maxTurns) ||
+      value.maxTurns < 0 ||
+      value.maxTurns > 100_000
+    ) {
+      throw new Error("runtime must contain valid maxConcurrentTools and maxTurns values.");
+    }
+    return {
+      maxConcurrentTools: value.maxConcurrentTools,
+      maxTurns: value.maxTurns
+    };
+  })();
   return {
     runId,
     projectId,
@@ -546,7 +576,8 @@ export const parseRuntimeStartRequest = (json: string): RuntimeStartRequest => {
     ...(parsedMessages === undefined ? {} : { messages: parsedMessages }),
     ...(toolsEnabled === undefined ? {} : { toolsEnabled }),
     ...(parsedPlugins === undefined ? {} : { plugins: parsedPlugins }),
-    ...(parsedResume === undefined ? {} : { resume: parsedResume })
+    ...(parsedResume === undefined ? {} : { resume: parsedResume }),
+    ...(parsedRuntime === undefined ? {} : { runtime: parsedRuntime })
   };
 };
 

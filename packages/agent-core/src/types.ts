@@ -52,6 +52,7 @@ export interface ProviderTokenUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
 }
 
 export interface ProviderStreamEvent {

@@ -9,6 +9,7 @@ import {
   createNativeWorkspaceTools,
   installAbortControllerFallback,
   installPocketPilotRuntime,
+  parseRuntimeStartRequest,
   resolveRuntimeGlobal,
   type PocketPilotGlobalScope,
   type ToolRequestEnvelope
@@ -18,6 +19,21 @@ const parse = (json: string): Record<string, unknown> =>
   JSON.parse(json) as Record<string, unknown>;
 
 describe("Android runtime bridge", () => {
+  it("validates per-run execution limits", () => {
+    expect(parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-limits",
+      projectId: "project-1",
+      task: "work",
+      runtime: { maxConcurrentTools: 3, maxTurns: 0 }
+    }))).toMatchObject({ runtime: { maxConcurrentTools: 3, maxTurns: 0 } });
+    expect(() => parseRuntimeStartRequest(JSON.stringify({
+      runId: "run-limits",
+      projectId: "project-1",
+      task: "work",
+      runtime: { maxConcurrentTools: 0, maxTurns: -1 }
+    }))).toThrow(/runtime/u);
+  });
+
   it("installs the required global API and immediately announces runtime.ready", () => {
     const postMessage = vi.fn();
     const target: PocketPilotGlobalScope = {
